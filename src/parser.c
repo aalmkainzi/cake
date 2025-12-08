@@ -1108,8 +1108,9 @@ enum token_type is_keyword(const char* text, enum target target)
     case 'n':
         if (strcmp("nullptr", text) == 0)
             return TK_KEYWORD_NULLPTR;
+        if(strcmp("namespace", text) == 0)
+            return TK_KEYWORD_NAMESPACE;
         break;
-
     case 'o':
         if (strcmp("offsetof", text) == 0)
             return TK_KEYWORD_GCC__BUILTIN_OFFSETOF;
