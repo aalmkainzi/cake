@@ -3,6 +3,8 @@
  *  https://github.com/thradams/cake
 */
 
+#include "token.h"
+#include "type.h"
 #pragma safety enable
 
 #include "ownership.h"
@@ -933,6 +935,14 @@ bool first_of_label(const struct parser_ctx* ctx)
     return false;
 }
 
+bool first_of_namespace_specifier(const struct parser_ctx* ctx)
+{
+    if (ctx->current == NULL)
+        return false;
+    
+    return ctx->current->type == TK_KEYWORD_NAMESPACE;
+}
+
 bool first_of_declaration_specifier(const struct parser_ctx* ctx)
 {
     /*
@@ -943,7 +953,8 @@ bool first_of_declaration_specifier(const struct parser_ctx* ctx)
     */
     return first_of_storage_class_specifier(ctx) ||
         first_of_function_specifier(ctx) ||
-        first_of_type_specifier_qualifier(ctx);
+        first_of_type_specifier_qualifier(ctx) ||
+        first_of_namespace_specifier(ctx);
 }
 
 bool first_of_pragma_declaration(const struct parser_ctx* ctx)
@@ -1108,8 +1119,6 @@ enum token_type is_keyword(const char* text, enum target target)
     case 'n':
         if (strcmp("nullptr", text) == 0)
             return TK_KEYWORD_NULLPTR;
-        if(strcmp("namespace", text) == 0)
-            return TK_KEYWORD_NAMESPACE;
         break;
     case 'o':
         if (strcmp("offsetof", text) == 0)
@@ -1313,6 +1322,9 @@ enum token_type is_keyword(const char* text, enum target target)
         if (strcmp("__alignof__", text) == 0)
             return TK_KEYWORD__ALIGNOF;
 
+        if(strcmp("_Namespace", text) == 0)
+            return TK_KEYWORD_NAMESPACE;
+        
         if (target == TARGET_X86_MSVC || target == TARGET_X64_MSVC)
         {
             if (strcmp("__ptr32", text) == 0)
@@ -2384,6 +2396,11 @@ struct declaration_specifier* _Owner _Opt declaration_specifier(struct parser_ct
         {
             p_declaration_specifier->function_specifier = function_specifier(ctx);
             if (p_declaration_specifier->function_specifier == NULL) throw;
+        }
+        else if (first_of_namespace_specifier(ctx))
+        {
+            p_declaration_specifier->namespace_specifier = namespace_specifier(ctx);
+            if (p_declaration_specifier->namespace_specifier == NULL) throw;
         }
         else
         {
@@ -5559,6 +5576,58 @@ struct function_specifier* _Owner _Opt function_specifier(struct parser_ctx* ctx
     }
 
     return p_function_specifier;
+}
+
+void namespace_specifier_delete(struct namespace_specifier* _Owner _Opt p)
+{
+    if (p)
+    {
+        free(p);
+    }
+}
+
+struct namespace_specifier* _Owner _Opt namespace_specifier(struct parser_ctx* ctx)
+{
+    struct namespace_specifier* _Owner _Opt p_namespace_specifier = NULL;
+    try
+    {
+        if (ctx->current == NULL)
+        {
+            unexpected_end_of_file(ctx);
+            throw;
+        }
+        
+        p_namespace_specifier = calloc(1, sizeof * p_namespace_specifier);
+        if (p_namespace_specifier == NULL)
+            throw;
+        
+        p_namespace_specifier->token = ctx->current;
+        parser_match_tk(ctx, TK_KEYWORD_NAMESPACE);
+        
+        p_namespace_specifier->namespace_name = ctx->current->lexeme;
+        parser_match_tk(ctx, TK_IDENTIFIER);
+        
+        if (ctx->current->type == TK_PLUS_ASSIGN)
+        {
+            //p_namespace_specifier->flags |= NAMESPACE_SPECIFIER_APPLY_PREFIX;
+            parser_match_tk(ctx, TK_PLUS_ASSIGN);
+        }
+        else if (ctx->current->type == TK_EQUALS_SIGN)
+        {
+            //p_namespace_specifier->flags |= NAMESPACE_SPECIFIER_CAPTURE_PREFIX;
+            parser_match_tk(ctx, TK_EQUALS_SIGN);
+        }
+        
+        p_namespace_specifier->prefix = ctx->current->lexeme;
+        parser_match_tk(ctx, TK_STRING_LITERAL);
+    }
+    catch
+    {
+        namespace_specifier_delete(p_namespace_specifier);
+        p_namespace_specifier = NULL;
+    }
+    
+    return p_namespace_specifier;
 }
 
 struct declarator* _Owner declarator_add_ref(struct declarator* p)

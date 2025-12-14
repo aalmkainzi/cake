@@ -148,6 +148,13 @@ enum function_specifier_flags
     FUNCTION_SPECIFIER_NORETURN = 1 << 1,
 };
 
+enum namespace_specifier_flags
+{
+    NAMESPACE_SPECIFIER_NONE = 0,
+    NAMESPACE_SPECIFIER_APPLY_PREFIX = 1 << 0,
+    NAMESPACE_SPECIFIER_CAPTURE_PREFIX = 1 << 1
+};
+
 enum alignment_specifier_flags
 {
     ALIGNMENT_SPECIFIER_NONE = 0,

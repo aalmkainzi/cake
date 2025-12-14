@@ -193,12 +193,37 @@ struct declaration_specifier
 
     struct function_specifier* _Owner _Opt function_specifier;
     struct alignment_specifier* _Owner _Opt alignment_specifier;
+    struct namespace_specifier* namespace_specifier;
 
     struct declaration_specifier* _Owner _Opt next;
+    
 };
 
 struct declaration_specifier* _Owner _Opt declaration_specifier(struct parser_ctx* ctx);
 void declaration_specifier_delete(struct declaration_specifier* _Owner _Opt p);
+
+struct namespace_specifier
+{
+    struct token *token;
+    // enum namespace_specifier_flags flags;
+    char *prefix;
+    char *namespace_name;
+    struct apply_prefix_namespace* apply_prefix_namespace;
+    struct capture_prefix_namespace* capture_prefix_namespace;
+};
+
+struct apply_prefix_namespace
+{
+    char *namespace_name;
+    char *prefix;
+};
+
+struct capture_prefix_namespace
+{
+    char **mappings;
+};
+
+struct namespace_specifier* _Owner _Opt namespace_specifier(struct parser_ctx* ctx);
 
 struct declaration_specifiers
 {
