@@ -485,6 +485,7 @@ struct declaration
 
     struct compound_statement* _Owner _Opt  function_body;
     struct defer_list defer_list; //arguments
+    struct namespace_scope* _Owner _Opt namespace_scope;
 
     struct declarator* _Opt  contract_declarator;
 
