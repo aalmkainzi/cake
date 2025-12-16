@@ -27,6 +27,15 @@ struct scope
     struct scope* _Opt previous;
 };
 
+struct namespace_scope
+{
+    struct capture_prefix_namespace* _Opt capture_prefix_namespace;
+    struct apply_prefix_namespace* _Opt apply_prefix_namespace;
+    
+    struct namespace_scope* _Opt next;
+    struct namespace_scope* _Opt prev;
+};
+
 void scope_destroy(_Dtor struct scope* p);
 
 struct scope_list
@@ -94,7 +103,8 @@ struct parser_ctx
     */
     struct scope* _Opt p_current_function_scope_opt;
 
-
+    struct namespace_scope* outer_ns_scopes;
+    struct namespace_scope* _Opt current_ns_scope_opt;
     /*
     *  Used to track non-used labels or used and not defined labels
     */
@@ -220,7 +230,7 @@ struct apply_prefix_namespace
 
 struct capture_prefix_namespace
 {
-    char **mappings;
+    char* (*prefix_to_namespace_mappings)[2];
 };
 
 struct namespace_specifier* _Owner _Opt namespace_specifier(struct parser_ctx* ctx);
