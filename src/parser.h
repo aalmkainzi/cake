@@ -29,11 +29,26 @@ struct scope
 
 struct namespace_scope
 {
+    struct namespace_name_list *name_list;
     struct capture_prefix_namespace* _Opt capture_prefix_namespace;
     struct apply_prefix_namespace* _Opt apply_prefix_namespace;
     
     struct namespace_scope* _Opt next;
     struct namespace_scope* _Opt prev;
+};
+
+struct namespace_entry
+{
+    char *identifer;
+    struct map_entry original_identifier;
+    struct namespace_entry *next;
+};
+
+struct namespace_name_list
+{
+    struct namespace_name_list *parent_ns;
+    char *ns_name;
+    struct namespace_entry *head; // doesn't include nested namespaces
 };
 
 void scope_destroy(_Dtor struct scope* p);
@@ -103,7 +118,7 @@ struct parser_ctx
     */
     struct scope* _Opt p_current_function_scope_opt;
 
-    struct namespace_scope* outer_ns_scopes;
+    struct namespace_name_list* outer_namespaces;
     struct namespace_scope* _Opt current_ns_scope_opt;
     /*
     *  Used to track non-used labels or used and not defined labels
@@ -203,7 +218,6 @@ struct declaration_specifier
 
     struct function_specifier* _Owner _Opt function_specifier;
     struct alignment_specifier* _Owner _Opt alignment_specifier;
-    struct namespace_specifier* namespace_specifier;
 
     struct declaration_specifier* _Owner _Opt next;
     
@@ -211,16 +225,6 @@ struct declaration_specifier
 
 struct declaration_specifier* _Owner _Opt declaration_specifier(struct parser_ctx* ctx);
 void declaration_specifier_delete(struct declaration_specifier* _Owner _Opt p);
-
-struct namespace_specifier
-{
-    struct token *token;
-    // enum namespace_specifier_flags flags;
-    char *prefix;
-    char *namespace_name;
-    struct apply_prefix_namespace* apply_prefix_namespace;
-    struct capture_prefix_namespace* capture_prefix_namespace;
-};
 
 struct apply_prefix_namespace
 {

@@ -935,11 +935,11 @@ bool first_of_label(const struct parser_ctx* ctx)
     return false;
 }
 
-bool first_of_namespace_specifier(const struct parser_ctx* ctx)
+bool first_of_namespace_declaration(const struct parser_ctx* ctx)
 {
     if (ctx->current == NULL)
         return false;
-    
+
     return ctx->current->type == TK_KEYWORD_NAMESPACE;
 }
 
@@ -953,8 +953,7 @@ bool first_of_declaration_specifier(const struct parser_ctx* ctx)
     */
     return first_of_storage_class_specifier(ctx) ||
         first_of_function_specifier(ctx) ||
-        first_of_type_specifier_qualifier(ctx) ||
-        first_of_namespace_specifier(ctx);
+        first_of_type_specifier_qualifier(ctx);
 }
 
 bool first_of_pragma_declaration(const struct parser_ctx* ctx)
@@ -1916,6 +1915,10 @@ struct declaration* _Owner _Opt declaration_core(struct parser_ctx* ctx,
         {
             p_declaration->pragma_declaration = pragma_declaration(ctx);
         }
+        else if (first_of_namespace_declaration(ctx))
+        {
+            
+        }
         else
         {
 
@@ -2396,11 +2399,6 @@ struct declaration_specifier* _Owner _Opt declaration_specifier(struct parser_ct
         {
             p_declaration_specifier->function_specifier = function_specifier(ctx);
             if (p_declaration_specifier->function_specifier == NULL) throw;
-        }
-        else if (first_of_namespace_specifier(ctx))
-        {
-            p_declaration_specifier->namespace_specifier = namespace_specifier(ctx);
-            if (p_declaration_specifier->namespace_specifier == NULL) throw;
         }
         else
         {
@@ -11021,10 +11019,16 @@ struct declaration_list translation_unit(struct parser_ctx* ctx, bool* berror)
                 asm_statement_delete(p3);
             }
 
+            if (ctx->current->type == TK_KEYWORD_NAMESPACE)
+            {
+                // TODO determine whether it's apply-prefix or capture-prefix
+            }
             struct declaration* _Owner _Opt p = external_declaration(ctx);
             if (p == NULL)
                 throw;
             declaration_list_add(&declaration_list, p);
+            
+            // TODO here we add whatever was just declared to the namespace scope we are currently in
         }
 
         check_unused_static_declarators(ctx, &declaration_list);
