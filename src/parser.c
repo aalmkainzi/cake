@@ -11009,29 +11009,21 @@ struct declaration_list translation_unit(struct parser_ctx* ctx, bool* berror)
                     
                     switch(ctx->current->type)
                     {
-                        case '=':
-                            // might be either alias ok capture-prefix
-                            parser_match_tk(ctx, '=');
-                            
-                            if (ctx->current->type == TK_STRING_LITERAL)
+                        case '-=':
+                            // capture prefix
+                            parser_match_tk(ctx, '-=');
+                            if (ctx->current_ns_scope_opt != NULL)
                             {
-                                // capture prefix
-                                if (ctx->current_ns_scope_opt != NULL)
-                                {
-                                    struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
-                                    new_scope->capture_prefix_namespace = calloc(1, sizeof (struct capture_prefix_namespace));
-                                    ctx->current_ns_scope_opt->next = new_scope;
-                                    new_scope->prev = ctx->current_ns_scope_opt;
-                                    ctx->current_ns_scope_opt = new_scope;
-                                }
-                            }
-                            else
-                            {
-                                // alias
+                                struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
+                                new_scope->capture_prefix_namespace = calloc(1, sizeof (struct capture_prefix_namespace));
+                                ctx->current_ns_scope_opt->next = new_scope;
+                                new_scope->prev = ctx->current_ns_scope_opt;
+                                ctx->current_ns_scope_opt = new_scope;
                             }
                             
                             break;
                         case '+=':
+                            // apply-prefix
                             parser_match_tk(ctx, '+=');
                             if (ctx->current->type == TK_STRING_LITERAL)
                             {
