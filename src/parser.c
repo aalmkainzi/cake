@@ -3,6 +3,7 @@
  *  https://github.com/thradams/cake
 */
 
+#include "options.h"
 #include "token.h"
 #include "type.h"
 #pragma safety enable
@@ -1434,6 +1435,24 @@ struct token* _Opt parser_look_ahead(const struct parser_ctx* ctx)
     return p;
 }
 
+struct token* _Opt token_look_ahead(struct parser_ctx *ctx, struct token* tok)
+{
+    if (tok == NULL)
+        return NULL;
+
+    struct token* _Opt p = tok->next;
+    while (p && !(p->flags & TK_FLAG_FINAL))
+    {
+        p = p->next;
+    }
+
+    if (p)
+    {
+        token_promote(ctx, p);
+    }
+
+    return p;
+}
 
 static struct token* _Opt pragma_declaration_match(const struct token* p_current)
 {
@@ -5582,50 +5601,6 @@ void namespace_specifier_delete(struct namespace_specifier* _Owner _Opt p)
     {
         free(p);
     }
-}
-
-struct namespace_specifier* _Owner _Opt namespace_specifier(struct parser_ctx* ctx)
-{
-    struct namespace_specifier* _Owner _Opt p_namespace_specifier = NULL;
-    try
-    {
-        if (ctx->current == NULL)
-        {
-            unexpected_end_of_file(ctx);
-            throw;
-        }
-        
-        p_namespace_specifier = calloc(1, sizeof * p_namespace_specifier);
-        if (p_namespace_specifier == NULL)
-            throw;
-        
-        p_namespace_specifier->token = ctx->current;
-        parser_match_tk(ctx, TK_KEYWORD_NAMESPACE);
-        
-        p_namespace_specifier->namespace_name = ctx->current->lexeme;
-        parser_match_tk(ctx, TK_IDENTIFIER);
-        
-        if (ctx->current->type == TK_PLUS_ASSIGN)
-        {
-            //p_namespace_specifier->flags |= NAMESPACE_SPECIFIER_APPLY_PREFIX;
-            parser_match_tk(ctx, TK_PLUS_ASSIGN);
-        }
-        else if (ctx->current->type == TK_EQUALS_SIGN)
-        {
-            //p_namespace_specifier->flags |= NAMESPACE_SPECIFIER_CAPTURE_PREFIX;
-            parser_match_tk(ctx, TK_EQUALS_SIGN);
-        }
-        
-        p_namespace_specifier->prefix = ctx->current->lexeme;
-        parser_match_tk(ctx, TK_STRING_LITERAL);
-    }
-    catch
-    {
-        namespace_specifier_delete(p_namespace_specifier);
-        p_namespace_specifier = NULL;
-    }
-    
-    return p_namespace_specifier;
 }
 
 struct declarator* _Owner declarator_add_ref(struct declarator* p)
@@ -11022,6 +10997,64 @@ struct declaration_list translation_unit(struct parser_ctx* ctx, bool* berror)
             if (ctx->current->type == TK_KEYWORD_NAMESPACE)
             {
                 // TODO determine whether it's apply-prefix or capture-prefix
+                parser_match_tk(ctx, TK_KEYWORD_NAMESPACE);
+                if (ctx->current->type != TK_IDENTIFIER)
+                {
+                    compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);
+                }
+                else
+                {
+                    char *ns_name = ctx->current->lexeme;
+                    parser_match_tk(ctx, TK_IDENTIFIER);
+                    
+                    switch(ctx->current->type)
+                    {
+                        case '=':
+                            // might be either alias ok capture-prefix
+                            parser_match_tk(ctx, '=');
+                            
+                            if (ctx->current->type == TK_STRING_LITERAL)
+                            {
+                                // capture prefix
+                                if (ctx->current_ns_scope_opt != NULL)
+                                {
+                                    struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
+                                    new_scope->capture_prefix_namespace = calloc(1, sizeof (struct capture_prefix_namespace));
+                                    ctx->current_ns_scope_opt->next = new_scope;
+                                    new_scope->prev = ctx->current_ns_scope_opt;
+                                    ctx->current_ns_scope_opt = new_scope;
+                                }
+                            }
+                            else
+                            {
+                                // alias
+                            }
+                            
+                            break;
+                        case '+=':
+                            parser_match_tk(ctx, '+=');
+                            if (ctx->current->type == TK_STRING_LITERAL)
+                            {
+                                // capture prefix
+                                struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
+                                new_scope->capture_prefix_namespace = calloc(1, sizeof (struct capture_prefix_namespace));
+                                if (ctx->current_ns_scope_opt != NULL)
+                                {
+                                    ctx->current_ns_scope_opt->next = new_scope;
+                                    new_scope->prev = ctx->current_ns_scope_opt;
+                                }
+                                
+                                ctx->current_ns_scope_opt = new_scope;
+                            }
+                            else
+                            {
+                                compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);
+                            }
+                            break;
+                        default:
+                            compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);;
+                    }
+                }
             }
             struct declaration* _Owner _Opt p = external_declaration(ctx);
             if (p == NULL)

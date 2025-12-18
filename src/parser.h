@@ -32,7 +32,7 @@ struct namespace_scope
     struct namespace_name_list *name_list;
     struct capture_prefix_namespace* _Opt capture_prefix_namespace;
     struct apply_prefix_namespace* _Opt apply_prefix_namespace;
-    
+
     struct namespace_scope* _Opt next;
     struct namespace_scope* _Opt prev;
 };
@@ -232,9 +232,18 @@ struct apply_prefix_namespace
     char *prefix;
 };
 
+struct capture_prefix_entry
+{
+    struct namespace_name_list ns;
+    char *prefix;
+    
+    struct capture_prefix_entry* next;
+};
+
 struct capture_prefix_namespace
 {
-    char* (*prefix_to_namespace_mappings)[2];
+    struct capture_prefix_entry* head;
+    struct capture_prefix_entry* tail;
 };
 
 struct namespace_specifier* _Owner _Opt namespace_specifier(struct parser_ctx* ctx);
