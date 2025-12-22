@@ -3,6 +3,7 @@
  *  https://github.com/thradams/cake
 */
 
+#include "error.h"
 #include "options.h"
 #include "token.h"
 #include "type.h"
@@ -10971,6 +10972,211 @@ struct declaration* _Owner _Opt external_declaration(struct parser_ctx* ctx)
     return function_definition_or_declaration(ctx);
 }
 
+struct namespace_name_list *get_namespace(struct parser_ctx *ctx, char *name, struct namespace_name_list *parent)
+{
+    if (parent == NULL)
+    {
+        struct namespace_list_entry *it = ctx->outer_namespaces.head;
+        while (it != NULL)
+        {
+            if (strcmp(it->ns->ns_name, name) == 0)
+            {
+                return it->ns;
+            }
+            
+            it = it->next;
+        }
+        
+        struct namespace_name_list* new_ns = calloc(1, sizeof (struct namespace_name_list));
+        new_ns->ns_name = name;
+        
+        if(ctx->outer_namespaces.head == NULL)
+        {
+            ctx->outer_namespaces.head = calloc(1, sizeof (struct namespace_list_entry));
+            ctx->outer_namespaces.tail = ctx->outer_namespaces.head;
+            ctx->outer_namespaces.head->ns = new_ns;
+        }
+        else
+        {
+            ctx->outer_namespaces.tail->next = calloc(1, sizeof (struct namespace_list_entry));
+            ctx->outer_namespaces.tail = ctx->outer_namespaces.tail->next;
+            ctx->outer_namespaces.tail->ns = new_ns;
+        }
+        
+        return new_ns;
+    }
+    else
+    {
+        assert(0 && "implement handling nested namespaces");
+        return NULL;
+    }
+}
+
+char* unquote(const char* str)
+{
+    char* ret = strdup(str + 1);
+    ret[strlen(ret) - 1] = '\0';
+    return ret;
+}
+
+struct namespace_name_list* get_parent_namespace(struct parser_ctx* ctx, const char *ns_name)
+{
+     // TODO here we should handle nested-namespace-definition
+    
+    if (ctx->current_ns_scope_opt != NULL)
+    {
+        if(ctx->current_ns_scope_opt->apply_prefix_namespace != NULL)
+        {
+            return ctx->current_ns_scope_opt->apply_prefix_namespace->ns;
+        }
+        else
+        {
+            struct capture_prefix_namespace_scope* outer_scope = ctx->current_ns_scope_opt->capture_prefix_namespace;
+            
+            struct capture_prefix_entry* cur = outer_scope->head;
+            while (cur != NULL)
+            {
+                if (strstr(ns_name, cur->prefix) == ns_name)
+                {
+                    
+                    break;
+                }
+                cur = cur->next;
+            }
+            
+            if (cur == NULL)
+            {
+                
+            }
+        }
+        
+        ctx->current_ns_scope_opt->next = new_scope;
+        new_scope->prev = ctx->current_ns_scope_opt;
+    }
+    else
+    {
+        return NULL;
+    }
+}
+
+void handle_namespace(struct parser_ctx *ctx)
+{
+    if(ctx->current->type != TK_KEYWORD_NAMESPACE)
+        return;
+    
+    // TODO determine whether it's apply-prefix or capture-prefix
+    parser_match_tk(ctx, TK_KEYWORD_NAMESPACE);
+    if (ctx->current->type != TK_IDENTIFIER)
+    {
+        compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);
+        return;
+    }
+    
+    char *ns_name = ctx->current->lexeme;
+    parser_match_tk(ctx, TK_IDENTIFIER);
+    
+    switch(ctx->current->type)
+    {
+        case '-=':
+        {
+            // capture prefix
+            parser_match_tk(ctx, '-=');
+            
+            struct namespace_name_list *parent = NULL;
+            
+            struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
+            new_scope->capture_prefix_namespace = calloc(1, sizeof (struct capture_prefix_namespace_scope));
+            
+            if (ctx->current_ns_scope_opt != NULL)
+            {
+                if(ctx->current_ns_scope_opt->apply_prefix_namespace != NULL)
+                {
+                    parent = ctx->current_ns_scope_opt->apply_prefix_namespace->ns;
+                }
+                else
+                {
+                    struct capture_prefix_namespace_scope* outer_scope = ctx->current_ns_scope_opt->capture_prefix_namespace; // bro... uh oh... what happens if multiple mappings and a namespace scope is inside????
+                    // ok its decided... it must be prefixed or it belongs outside
+                    
+                    struct capture_prefix_entry* cur = outer_scope->head;
+                    while (cur != NULL)
+                    {
+                        if (strstr(ns_name, cur->prefix) == ns_name)
+                        {
+                            
+                            break;
+                        }
+                        cur = cur->next;
+                    }
+                    
+                    if (cur == NULL)
+                    {
+                        
+                    }
+                }
+                
+                ctx->current_ns_scope_opt->next = new_scope;
+                new_scope->prev = ctx->current_ns_scope_opt;
+            }
+            ctx->current_ns_scope_opt = new_scope;
+            
+            new_scope->capture_prefix_namespace->head = calloc(1, sizeof (struct capture_prefix_entry));
+            new_scope->capture_prefix_namespace->head->ns = get_namespace(ctx, ns_name, parent);
+            new_scope->capture_prefix_namespace->head->prefix = unquote(ctx->current->lexeme);
+            new_scope->capture_prefix_namespace->tail = new_scope->capture_prefix_namespace->head;
+            parser_match_tk(ctx, TK_STRING_LITERAL);
+            
+            while(ctx->current->type == ',')
+            {
+                parser_match_tk(ctx, ',');
+                
+                char *ns_name = ctx->current->lexeme;
+                parser_match_tk(ctx, TK_IDENTIFIER); // TODO here we're only matching identifiers, but we should handle nested-namespace-definition
+                parser_match_tk(ctx, '-=');
+                char *prefix = unquote(ctx->current->lexeme);
+                
+                parser_match_tk(ctx, TK_STRING_LITERAL);
+                
+                new_scope->capture_prefix_namespace->tail->next = calloc(1, sizeof (struct capture_prefix_entry));
+                new_scope->capture_prefix_namespace->tail = new_scope->capture_prefix_namespace->tail->next;
+                new_scope->capture_prefix_namespace->tail->prefix = prefix;
+                new_scope->capture_prefix_namespace->tail->ns = get_namespace(ctx, ns_name, parent); // again, we're passing parent without considering nested-namespace-definition
+            }
+        }
+        break;
+        case '+=':
+        {
+            // apply-prefix
+            parser_match_tk(ctx, '+=');
+            struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
+            new_scope->apply_prefix_namespace = calloc(1, sizeof (struct apply_prefix_namespace_scope));
+            
+            if (ctx->current_ns_scope_opt != NULL)
+            {
+                ctx->current_ns_scope_opt->next = new_scope;
+                new_scope->prev = ctx->current_ns_scope_opt;
+            }
+            ctx->current_ns_scope_opt = new_scope;
+            
+            new_scope->apply_prefix_namespace->ns = get_namespace(ctx, ns_name, );
+            new_scope->apply_prefix_namespace->prefix = ctx->current->lexeme;
+            
+            if (ctx->current->type != TK_STRING_LITERAL)
+            {
+                compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);
+                return;
+            }
+        }
+        break;
+        case '=':
+            // alias
+            assert(0 && ("not implemented"));
+            break;
+        default:
+            compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);;
+    }
+}
+
 struct declaration_list translation_unit(struct parser_ctx* ctx, bool* berror)
 {
     *berror = false;
@@ -10994,60 +11200,7 @@ struct declaration_list translation_unit(struct parser_ctx* ctx, bool* berror)
                 asm_statement_delete(p3);
             }
 
-            if (ctx->current->type == TK_KEYWORD_NAMESPACE)
-            {
-                // TODO determine whether it's apply-prefix or capture-prefix
-                parser_match_tk(ctx, TK_KEYWORD_NAMESPACE);
-                if (ctx->current->type != TK_IDENTIFIER)
-                {
-                    compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);
-                }
-                else
-                {
-                    char *ns_name = ctx->current->lexeme;
-                    parser_match_tk(ctx, TK_IDENTIFIER);
-                    
-                    switch(ctx->current->type)
-                    {
-                        case '-=':
-                            // capture prefix
-                            parser_match_tk(ctx, '-=');
-                            if (ctx->current_ns_scope_opt != NULL)
-                            {
-                                struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
-                                new_scope->capture_prefix_namespace = calloc(1, sizeof (struct capture_prefix_namespace));
-                                ctx->current_ns_scope_opt->next = new_scope;
-                                new_scope->prev = ctx->current_ns_scope_opt;
-                                ctx->current_ns_scope_opt = new_scope;
-                            }
-                            
-                            break;
-                        case '+=':
-                            // apply-prefix
-                            parser_match_tk(ctx, '+=');
-                            if (ctx->current->type == TK_STRING_LITERAL)
-                            {
-                                // capture prefix
-                                struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
-                                new_scope->capture_prefix_namespace = calloc(1, sizeof (struct capture_prefix_namespace));
-                                if (ctx->current_ns_scope_opt != NULL)
-                                {
-                                    ctx->current_ns_scope_opt->next = new_scope;
-                                    new_scope->prev = ctx->current_ns_scope_opt;
-                                }
-                                
-                                ctx->current_ns_scope_opt = new_scope;
-                            }
-                            else
-                            {
-                                compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);
-                            }
-                            break;
-                        default:
-                            compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);;
-                    }
-                }
-            }
+
             struct declaration* _Owner _Opt p = external_declaration(ctx);
             if (p == NULL)
                 throw;

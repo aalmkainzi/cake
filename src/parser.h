@@ -29,9 +29,8 @@ struct scope
 
 struct namespace_scope
 {
-    struct namespace_name_list *name_list;
-    struct capture_prefix_namespace* _Opt capture_prefix_namespace;
-    struct apply_prefix_namespace* _Opt apply_prefix_namespace;
+    struct capture_prefix_namespace_scope* _Opt capture_prefix_namespace;
+    struct apply_prefix_namespace_scope* _Opt apply_prefix_namespace;
 
     struct namespace_scope* _Opt next;
     struct namespace_scope* _Opt prev;
@@ -49,6 +48,18 @@ struct namespace_name_list
     struct namespace_name_list *parent_ns;
     char *ns_name;
     struct namespace_entry *head; // doesn't include nested namespaces
+};
+
+struct namespace_list_entry
+{
+    struct namespace_name_list* ns;
+    struct namespace_list_entry* next;
+};
+
+struct namespace_list
+{
+    struct namespace_list_entry* head;
+    struct namespace_list_entry* tail;
 };
 
 void scope_destroy(_Dtor struct scope* p);
@@ -118,7 +129,7 @@ struct parser_ctx
     */
     struct scope* _Opt p_current_function_scope_opt;
 
-    struct namespace_name_list* outer_namespaces;
+    struct namespace_list outer_namespaces;
     struct namespace_scope* _Opt current_ns_scope_opt;
     /*
     *  Used to track non-used labels or used and not defined labels
@@ -226,21 +237,21 @@ struct declaration_specifier
 struct declaration_specifier* _Owner _Opt declaration_specifier(struct parser_ctx* ctx);
 void declaration_specifier_delete(struct declaration_specifier* _Owner _Opt p);
 
-struct apply_prefix_namespace
+struct apply_prefix_namespace_scope
 {
-    char *namespace_name;
+    struct namespace_name_list *ns;
     char *prefix;
 };
 
 struct capture_prefix_entry
 {
-    struct namespace_name_list ns;
+    struct namespace_name_list* ns;
     char *prefix;
     
     struct capture_prefix_entry* next;
 };
 
-struct capture_prefix_namespace
+struct capture_prefix_namespace_scope
 {
     struct capture_prefix_entry* head;
     struct capture_prefix_entry* tail;
