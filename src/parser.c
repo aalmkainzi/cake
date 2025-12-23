@@ -11007,8 +11007,27 @@ struct namespace_name_list *get_namespace(struct parser_ctx *ctx, char *name, st
     }
     else
     {
-        assert(0 && "implement handling nested namespaces");
-        return NULL;
+        struct namespace_nested_entry* cur = parent->ns_head;
+        while(cur != NULL)
+        {
+            if (strcmp(cur->ns->ns_name, name) == 0)
+            {
+                return cur->ns;
+            }
+            
+            cur = cur->next;
+        }
+        
+        struct namespace_name_list* new_ns = calloc(1, sizeof (struct namespace_name_list));
+        new_ns->ns_name = name;
+        new_ns->parent_ns = parent;
+        
+        struct namespace_nested_entry* new_entry = calloc(1, sizeof(struct namespace_nested_entry));
+        new_entry->ns = new_ns;
+        new_entry->next = parent->ns_head;
+        parent->ns_head = new_entry;
+        
+        return new_ns;
     }
 }
 
@@ -11019,44 +11038,35 @@ char* unquote(const char* str)
     return ret;
 }
 
+// TODO to make this able to handle nested-namespace-definition, it needs to not take char*, but tokens (to see the '::')
 struct namespace_name_list* get_parent_namespace(struct parser_ctx* ctx, const char *ns_name)
 {
-     // TODO here we should handle nested-namespace-definition
+    struct namespace_scope* outer_scope = ctx->current_ns_scope_opt;
+    struct capture_prefix_namespace_scope* capture_scope = outer_scope->capture_prefix_namespace;
     
-    if (ctx->current_ns_scope_opt != NULL)
+    while(outer_scope != NULL)
     {
-        if(ctx->current_ns_scope_opt->apply_prefix_namespace != NULL)
+        if(outer_scope->capture_prefix_namespace != NULL)
         {
-            return ctx->current_ns_scope_opt->apply_prefix_namespace->ns;
-        }
-        else
-        {
-            struct capture_prefix_namespace_scope* outer_scope = ctx->current_ns_scope_opt->capture_prefix_namespace;
-            
-            struct capture_prefix_entry* cur = outer_scope->head;
+            struct capture_prefix_entry* cur = capture_scope->head;
             while (cur != NULL)
             {
                 if (strstr(ns_name, cur->prefix) == ns_name)
                 {
-                    
-                    break;
+                    return cur->ns;
                 }
                 cur = cur->next;
             }
-            
-            if (cur == NULL)
-            {
-                
-            }
+        }
+        else
+        {
+            return outer_scope->apply_prefix_namespace->ns;
         }
         
-        ctx->current_ns_scope_opt->next = new_scope;
-        new_scope->prev = ctx->current_ns_scope_opt;
+        outer_scope = outer_scope->prev;
     }
-    else
-    {
-        return NULL;
-    }
+    
+    return NULL;
 }
 
 void handle_namespace(struct parser_ctx *ctx)
@@ -11082,39 +11092,13 @@ void handle_namespace(struct parser_ctx *ctx)
             // capture prefix
             parser_match_tk(ctx, '-=');
             
-            struct namespace_name_list *parent = NULL;
+            struct namespace_name_list* parent = get_parent_namespace(ctx, ns_name);
             
             struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
             new_scope->capture_prefix_namespace = calloc(1, sizeof (struct capture_prefix_namespace_scope));
             
             if (ctx->current_ns_scope_opt != NULL)
             {
-                if(ctx->current_ns_scope_opt->apply_prefix_namespace != NULL)
-                {
-                    parent = ctx->current_ns_scope_opt->apply_prefix_namespace->ns;
-                }
-                else
-                {
-                    struct capture_prefix_namespace_scope* outer_scope = ctx->current_ns_scope_opt->capture_prefix_namespace; // bro... uh oh... what happens if multiple mappings and a namespace scope is inside????
-                    // ok its decided... it must be prefixed or it belongs outside
-                    
-                    struct capture_prefix_entry* cur = outer_scope->head;
-                    while (cur != NULL)
-                    {
-                        if (strstr(ns_name, cur->prefix) == ns_name)
-                        {
-                            
-                            break;
-                        }
-                        cur = cur->next;
-                    }
-                    
-                    if (cur == NULL)
-                    {
-                        
-                    }
-                }
-                
                 ctx->current_ns_scope_opt->next = new_scope;
                 new_scope->prev = ctx->current_ns_scope_opt;
             }

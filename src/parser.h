@@ -36,18 +36,25 @@ struct namespace_scope
     struct namespace_scope* _Opt prev;
 };
 
-struct namespace_entry
+struct namespace_identifier_entry
 {
     char *identifer;
     struct map_entry original_identifier;
-    struct namespace_entry *next;
+    struct namespace_identifier_entry *next;
+};
+
+struct namespace_nested_entry
+{
+    struct namespace_name_list* ns;
+    struct namespace_nested_entry* next;
 };
 
 struct namespace_name_list
 {
     struct namespace_name_list *parent_ns;
     char *ns_name;
-    struct namespace_entry *head; // doesn't include nested namespaces
+    struct namespace_identifier_entry *head;
+    struct namespace_nested_entry *ns_head;
 };
 
 struct namespace_list_entry
