@@ -676,24 +676,68 @@ struct map_entry* _Opt find_tag(struct parser_ctx* ctx, const char* lexeme)
     return NULL;
 }
 
-struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, const char* lexeme, struct scope* _Opt* _Opt ppscope_opt)
+char* dynstr_push(char* str, size_t* cap, char* topush)
+{
+    size_t len = strlen(str);
+    size_t plen = strlen(topush);
+    
+    if (len + plen >= *cap - 1)
+    {
+        *cap = (len + plen) * 2;
+        str = realloc(str, *cap);
+    }
+    strcat(str, topush);
+}
+
+// TODO: current problem, do we return the new token we stopped at or what? some of calls to this expect ctx->current to be updated as expected
+struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, struct token* tok, struct scope* _Opt* _Opt ppscope_opt)
 {
     if (ppscope_opt != NULL)
         *ppscope_opt = NULL; // out
-
+    
+    size_t cap = 64;
+    char* fullname = malloc(cap);
+    dynstr_push(fullname, &cap, tok->lexeme);
+    
+    tok = tok->next;
+    while(tok->type == '::')
+    {
+        dynstr_push(fullname, &cap, tok->lexeme);
+        tok = tok->next;
+        dynstr_push(fullname, &cap, tok->lexeme);
+        tok = tok->next;
+    }
+    
+    struct map_entry *ret = NULL;
     struct scope* _Opt scope = ctx->scopes.tail;
     while (scope)
     {
-        struct map_entry* _Opt p_entry = hashmap_find(&scope->variables, lexeme);
+        struct map_entry* _Opt p_entry = hashmap_find(&scope->variables, fullname);
         if (p_entry)
         {
             if (ppscope_opt)
                 *ppscope_opt = scope;
-            return p_entry;
+            ret = p_entry;
+            break;
+            if(scope == ctx->scopes.head)
+            {
+                // TODO use fullname to search the namespace entries
+                
+                ;
+            }
+            else
+            {
+                return ret;
+            }
         }
         scope = scope->previous;
     }
-    return NULL;
+    
+    assert(scope == NULL);
+    
+    
+    
+    return ret;
 }
 
 struct enum_specifier* _Opt find_enum_specifier(struct parser_ctx* ctx, const char* lexeme)
@@ -740,9 +784,9 @@ struct struct_or_union_specifier* _Opt find_struct_or_union_specifier(const stru
     return p;
 }
 
-struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char* lexeme, struct scope** _Opt ppscope_opt)
+struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, struct token* tok, struct scope** _Opt ppscope_opt)
 {
-    struct map_entry* _Opt p_entry = find_variables(ctx, lexeme, ppscope_opt);
+    struct map_entry* _Opt p_entry = find_variables(ctx, tok, ppscope_opt);
 
     if (p_entry)
     {
@@ -761,9 +805,9 @@ struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char
     return NULL;
 }
 
-struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, const char* lexeme, struct scope** _Opt ppscope_opt)
+struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, struct token* tok, struct scope** _Opt ppscope_opt)
 {
-    struct map_entry* _Opt p_entry = find_variables(ctx, lexeme, ppscope_opt);
+    struct map_entry* _Opt p_entry = find_variables(ctx, tok, ppscope_opt);
 
     if (p_entry && p_entry->type == TAG_TYPE_ENUMERATOR)
         return p_entry->data.p_enumerator;
@@ -790,7 +834,7 @@ bool first_of_typedef_name(const struct parser_ctx* ctx, struct token* p_token)
         return false;
     }
 
-    struct declarator* _Opt p_declarator = find_declarator(ctx, p_token->lexeme, NULL);
+    struct declarator* _Opt p_declarator = find_declarator(ctx, p_token, NULL);
 
     if (p_declarator &&
         p_declarator->declaration_specifiers &&
@@ -935,14 +979,6 @@ bool first_of_label(const struct parser_ctx* ctx)
     }
 
     return false;
-}
-
-bool first_of_namespace_declaration(const struct parser_ctx* ctx)
-{
-    if (ctx->current == NULL)
-        return false;
-
-    return ctx->current->type == TK_KEYWORD_NAMESPACE;
 }
 
 bool first_of_declaration_specifier(const struct parser_ctx* ctx)
@@ -1790,7 +1826,7 @@ struct declaration_specifiers* _Owner _Opt declaration_specifiers(struct parser_
                     {
                         p_declaration_specifiers->typedef_declarator =
                             find_declarator(ctx,
-                                p_declaration_specifier->type_specifier_qualifier->type_specifier->token->lexeme,
+                                p_declaration_specifier->type_specifier_qualifier->type_specifier->token,
                                 NULL);
 
                         // p_declaration_specifiers->typedef_declarator = p_declaration_specifier->type_specifier_qualifier->pType_specifier->token->lexeme;
@@ -1934,10 +1970,6 @@ struct declaration* _Owner _Opt declaration_core(struct parser_ctx* ctx,
         else if (first_of_pragma_declaration(ctx))
         {
             p_declaration->pragma_declaration = pragma_declaration(ctx);
-        }
-        else if (first_of_namespace_declaration(ctx))
-        {
-            
         }
         else
         {
@@ -2289,11 +2321,11 @@ struct declaration* _Owner _Opt declaration(struct parser_ctx* ctx,
                    Now we have the function body, let's see if we had a previous
                    function body.
                 */
-                const char* func_name =
-                    p_declaration->init_declarator_list.head->p_declarator->name_opt->lexeme;
+                struct token* func_tok =
+                    p_declaration->init_declarator_list.head->p_declarator->name_opt;
 
                 struct scope* _Opt p_previous_scope = NULL;
-                struct declarator* _Opt p_previous_declarator = find_declarator(ctx, func_name, &p_previous_scope);
+                struct declarator* _Opt p_previous_declarator = find_declarator(ctx, func_tok, &p_previous_scope);
                 if (p_previous_declarator && p_previous_declarator != p_declaration->init_declarator_list.head->p_declarator)
                 {
                     p_previous_declarator->p_complete_declarator = p_declaration->init_declarator_list.head->p_declarator;
@@ -2532,7 +2564,7 @@ struct init_declarator* _Owner _Opt init_declarator(struct parser_ctx* ctx,
         /////////////////////////////////////////////////////////////////////////////
         const char* declarator_name = p_init_declarator->p_declarator->name_opt->lexeme;
         struct scope* _Opt out_scope = NULL;
-        struct declarator* _Opt p_previous_declarator = find_declarator(ctx, declarator_name, &out_scope);
+        struct declarator* _Opt p_previous_declarator = find_declarator(ctx, p_init_declarator->p_declarator->name_opt, &out_scope);
         if (p_previous_declarator)
         {
             p_init_declarator->p_declarator->p_complete_declarator = p_previous_declarator;
@@ -3819,7 +3851,7 @@ struct type_specifier* _Owner _Opt type_specifier(struct parser_ctx* ctx)
             p_type_specifier->flags = TYPE_SPECIFIER_TYPEDEF;
 
             p_type_specifier->typedef_declarator =
-                find_declarator(ctx, ctx->current->lexeme, NULL);
+                find_declarator(ctx, ctx->current, NULL);
 
             // Ser chegou aqui já tem que exitir (reaprovecitar?)
             assert(p_type_specifier->typedef_declarator != NULL);
@@ -4821,7 +4853,7 @@ struct specifier_qualifier_list* _Owner _Opt specifier_qualifier_list(struct par
                 {
                     p_specifier_qualifier_list->typedef_declarator =
                         find_declarator(ctx,
-                            p_type_specifier_qualifier->type_specifier->token->lexeme,
+                            p_type_specifier_qualifier->type_specifier->token,
                             NULL);
                 }
             }
@@ -10912,7 +10944,7 @@ static void check_unused_static_declarators(struct parser_ctx* ctx, struct decla
             if (p->init_declarator_list.head &&
                 p->init_declarator_list.head->p_declarator)
             {
-                struct map_entry* _Opt p_entry = find_variables(ctx, p->init_declarator_list.head->p_declarator->name_opt->lexeme, NULL);
+                struct map_entry* _Opt p_entry = find_variables(ctx, p->init_declarator_list.head->p_declarator->name_opt, NULL);
                 if (p_entry && (p_entry->type == TAG_TYPE_DECLARATOR || p_entry->type == TAG_TYPE_INIT_DECLARATOR))
                 {
                     /*
@@ -10972,6 +11004,7 @@ struct declaration* _Owner _Opt external_declaration(struct parser_ctx* ctx)
     return function_definition_or_declaration(ctx);
 }
 
+// TODO needs to check if inside capture scope of parent
 struct namespace_name_list *get_namespace(struct parser_ctx *ctx, char *name, struct namespace_name_list *parent)
 {
     if (parent == NULL)
@@ -11038,52 +11071,79 @@ char* unquote(const char* str)
     return ret;
 }
 
-// TODO to make this able to handle nested-namespace-definition, it needs to not take char*, but tokens (to see the '::')
-struct namespace_name_list* get_parent_namespace(struct parser_ctx* ctx, const char *ns_name)
+struct namespace_name_list* get_parent_namespace(struct parser_ctx* ctx, char **ns_names, int nb_ns, char **ns_name)
 {
-    struct namespace_scope* outer_scope = ctx->current_ns_scope_opt;
-    struct capture_prefix_namespace_scope* capture_scope = outer_scope->capture_prefix_namespace;
+    *ns_name = strdup(ns_names[nb_ns - 1]);
     
+    struct namespace_scope* outer_scope = ctx->current_ns_scope_opt;
+    
+    struct namespace_name_list* outer_parent = NULL;
     while(outer_scope != NULL)
     {
         if(outer_scope->capture_prefix_namespace != NULL)
         {
+            struct capture_prefix_namespace_scope* capture_scope = outer_scope->capture_prefix_namespace;
             struct capture_prefix_entry* cur = capture_scope->head;
             while (cur != NULL)
             {
-                if (strstr(ns_name, cur->prefix) == ns_name)
+                if (strstr(ns_names[nb_ns - 1], cur->prefix) == ns_names[nb_ns - 1])
                 {
-                    return cur->ns;
+                    outer_parent = cur->ns;
+                    
+                    free(*ns_name);
+                    *ns_name = strdup(ns_names[nb_ns - 1] + strlen(cur->prefix));
+                    goto out;
                 }
                 cur = cur->next;
             }
         }
         else
         {
-            return outer_scope->apply_prefix_namespace->ns;
+            outer_parent = outer_scope->apply_prefix_namespace->ns;
+            goto out;
         }
         
         outer_scope = outer_scope->prev;
     }
     
-    return NULL;
-}
-
-void handle_namespace(struct parser_ctx *ctx)
-{
-    if(ctx->current->type != TK_KEYWORD_NAMESPACE)
-        return;
-    
-    // TODO determine whether it's apply-prefix or capture-prefix
-    parser_match_tk(ctx, TK_KEYWORD_NAMESPACE);
-    if (ctx->current->type != TK_IDENTIFIER)
+    out:;
+    struct namespace_name_list* prev_parent = outer_parent;
+    for(int i = 0 ; i < nb_ns - 1 ; i++)
     {
-        compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);
-        return;
+        prev_parent = get_namespace(ctx, ns_names[i], prev_parent);
     }
     
-    char *ns_name = ctx->current->lexeme;
+    return prev_parent;
+}
+
+char** get_namespace_spelling(struct parser_ctx *ctx, int* nested_def_count)
+{
+    char** namespace_spelling = calloc(16, sizeof (char*)); // 16 is the limit for nested def namespaces in one scope
+    *nested_def_count = 0;
+    
+    namespace_spelling[(*nested_def_count)++] = ctx->current->lexeme;
     parser_match_tk(ctx, TK_IDENTIFIER);
+    
+    while(ctx->current->type == '::')
+    {
+        parser_match_tk(ctx, '::');
+        
+        namespace_spelling[(*nested_def_count)++] = ctx->current->lexeme;
+        parser_match_tk(ctx, TK_IDENTIFIER);
+    }
+    
+    return namespace_spelling;
+}
+
+bool handle_namespace(struct parser_ctx *ctx)
+{
+    if(ctx->current->type != TK_KEYWORD_NAMESPACE)
+        return false;
+    
+    parser_match_tk(ctx, TK_KEYWORD_NAMESPACE);
+    
+    int nb_nested_defs;
+    char** namespace_names = get_namespace_spelling(ctx, &nb_nested_defs);
     
     switch(ctx->current->type)
     {
@@ -11092,20 +11152,18 @@ void handle_namespace(struct parser_ctx *ctx)
             // capture prefix
             parser_match_tk(ctx, '-=');
             
-            struct namespace_name_list* parent = get_parent_namespace(ctx, ns_name);
+            char *ns_name;
+            struct namespace_name_list* parent = get_parent_namespace(ctx, namespace_names, nb_nested_defs, &ns_name);
             
             struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
             new_scope->capture_prefix_namespace = calloc(1, sizeof (struct capture_prefix_namespace_scope));
             
-            if (ctx->current_ns_scope_opt != NULL)
-            {
-                ctx->current_ns_scope_opt->next = new_scope;
-                new_scope->prev = ctx->current_ns_scope_opt;
-            }
-            ctx->current_ns_scope_opt = new_scope;
-            
             new_scope->capture_prefix_namespace->head = calloc(1, sizeof (struct capture_prefix_entry));
-            new_scope->capture_prefix_namespace->head->ns = get_namespace(ctx, ns_name, parent);
+            
+            struct namespace_name_list* ns = get_namespace(ctx, namespace_names[nb_nested_defs - 1], parent);
+            ns->ns_name = ns_name;
+            
+            new_scope->capture_prefix_namespace->head->ns = ns;
             new_scope->capture_prefix_namespace->head->prefix = unquote(ctx->current->lexeme);
             new_scope->capture_prefix_namespace->tail = new_scope->capture_prefix_namespace->head;
             parser_match_tk(ctx, TK_STRING_LITERAL);
@@ -11114,18 +11172,32 @@ void handle_namespace(struct parser_ctx *ctx)
             {
                 parser_match_tk(ctx, ',');
                 
-                char *ns_name = ctx->current->lexeme;
-                parser_match_tk(ctx, TK_IDENTIFIER); // TODO here we're only matching identifiers, but we should handle nested-namespace-definition
-                parser_match_tk(ctx, '-=');
-                char *prefix = unquote(ctx->current->lexeme);
+                int nb_nested_defs;
+                char **capture_namespace_names = get_namespace_spelling(ctx, &nb_nested_defs);
                 
-                parser_match_tk(ctx, TK_STRING_LITERAL);
+                char *ns_name;
+                struct namespace_name_list* parent = get_parent_namespace(ctx, capture_namespace_names, nb_nested_defs, &ns_name);
+                
+                parser_match_tk(ctx, '-=');
+                
+                struct namespace_name_list* ns = get_namespace(ctx, capture_namespace_names[nb_nested_defs - 1], parent);
+                ns->ns_name = ns_name;
                 
                 new_scope->capture_prefix_namespace->tail->next = calloc(1, sizeof (struct capture_prefix_entry));
                 new_scope->capture_prefix_namespace->tail = new_scope->capture_prefix_namespace->tail->next;
-                new_scope->capture_prefix_namespace->tail->prefix = prefix;
-                new_scope->capture_prefix_namespace->tail->ns = get_namespace(ctx, ns_name, parent); // again, we're passing parent without considering nested-namespace-definition
+                new_scope->capture_prefix_namespace->tail->prefix = unquote(ctx->current->lexeme);
+                new_scope->capture_prefix_namespace->tail->ns = ns;
+                
+                parser_match_tk(ctx, TK_STRING_LITERAL);
             }
+            parser_match_tk(ctx, '{');
+            
+            if (ctx->current_ns_scope_opt != NULL)
+            {
+                ctx->current_ns_scope_opt->next = new_scope;
+            }
+            new_scope->prev = ctx->current_ns_scope_opt;
+            ctx->current_ns_scope_opt = new_scope;
         }
         break;
         case '+=':
@@ -11135,21 +11207,23 @@ void handle_namespace(struct parser_ctx *ctx)
             struct namespace_scope* new_scope = calloc(1, sizeof (struct namespace_scope));
             new_scope->apply_prefix_namespace = calloc(1, sizeof (struct apply_prefix_namespace_scope));
             
+            char *ns_name;
+            struct namespace_name_list* parent = get_parent_namespace(ctx, namespace_names, nb_nested_defs, &ns_name);
+            struct namespace_name_list* ns = get_namespace(ctx, namespace_names[nb_nested_defs - 1], parent);
+            ns->ns_name = ns_name;
+            
+            new_scope->apply_prefix_namespace->ns = ns;
+            new_scope->apply_prefix_namespace->prefix = unquote(ctx->current->lexeme);
+            
+            parser_match_tk(ctx, TK_STRING_LITERAL);
+            parser_match_tk(ctx, '{');
+            
             if (ctx->current_ns_scope_opt != NULL)
             {
                 ctx->current_ns_scope_opt->next = new_scope;
-                new_scope->prev = ctx->current_ns_scope_opt;
             }
+            new_scope->prev = ctx->current_ns_scope_opt;
             ctx->current_ns_scope_opt = new_scope;
-            
-            new_scope->apply_prefix_namespace->ns = get_namespace(ctx, ns_name, );
-            new_scope->apply_prefix_namespace->prefix = ctx->current->lexeme;
-            
-            if (ctx->current->type != TK_STRING_LITERAL)
-            {
-                compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);
-                return;
-            }
         }
         break;
         case '=':
@@ -11159,6 +11233,8 @@ void handle_namespace(struct parser_ctx *ctx)
         default:
             compiler_diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, 0, 0);;
     }
+    
+    return true;
 }
 
 struct declaration_list translation_unit(struct parser_ctx* ctx, bool* berror)
@@ -11174,6 +11250,15 @@ struct declaration_list translation_unit(struct parser_ctx* ctx, bool* berror)
     {
         while (ctx->current != NULL)
         {
+            if (ctx->current->type == '}' && ctx->current_ns_scope_opt != NULL)
+            {
+                ctx->current_ns_scope_opt = ctx->current_ns_scope_opt->prev;
+                if(ctx->current_ns_scope_opt != NULL)
+                    ctx->current_ns_scope_opt->next = NULL;
+                parser_match_tk(ctx, '}');
+                continue;
+            }
+            
             if (ctx->current->type == TK_KEYWORD__ASM)
             {
                 //TODO
@@ -11183,8 +11268,9 @@ struct declaration_list translation_unit(struct parser_ctx* ctx, bool* berror)
                 struct asm_statement* p3 = gcc_asm(ctx, true);
                 asm_statement_delete(p3);
             }
-
-
+            
+            if(handle_namespace(ctx))
+                continue;
             struct declaration* _Owner _Opt p = external_declaration(ctx);
             if (p == NULL)
                 throw;

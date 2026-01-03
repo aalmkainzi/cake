@@ -137,7 +137,7 @@ bool is_enumeration_constant(const struct parser_ctx* ctx)
     if (ctx->current->flags & TK_FLAG_IDENTIFIER_IS_NOT_ENUMERATOR)
         return false;
 
-    const bool is_enumerator = find_enumerator(ctx, ctx->current->lexeme, NULL) != NULL;
+    const bool is_enumerator = find_enumerator(ctx, ctx->current, NULL) != NULL;
 
     if (is_enumerator)
     {
@@ -1149,7 +1149,7 @@ struct expression* _Owner _Opt primary_expression(struct parser_ctx* ctx, enum e
             p_expression_node->last_token = ctx->current;
 
             struct scope* _Opt p_scope = NULL;
-            struct map_entry* _Opt p_entry = find_variables(ctx, ctx->current->lexeme, &p_scope);
+            struct map_entry* _Opt p_entry = find_variables(ctx, ctx->current, &p_scope);
 
             if (p_entry && p_entry->type == TAG_TYPE_ENUMERATOR)
             {
