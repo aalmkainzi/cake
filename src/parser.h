@@ -38,8 +38,9 @@ struct namespace_scope
 
 struct namespace_identifier_entry
 {
+    char *captured_prefix;
     char *identifer;
-    struct map_entry original_identifier;
+    struct map_entry *original_identifier;
     struct namespace_identifier_entry *next;
 };
 

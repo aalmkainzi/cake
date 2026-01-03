@@ -689,6 +689,54 @@ char* dynstr_push(char* str, size_t* cap, char* topush)
     strcat(str, topush);
 }
 
+// TODO: add another param
+// for when we want to ignore ns identifiers that are omitting the prefix when they shouldnt be
+// actually not another param, but a check after calling this.
+struct map_entry* namespace_contains(const struct parser_ctx* ctx, struct namespace_name_list* ns, const char *name, struct namespace_name_list **owning)
+{
+    // TODO this needs to be recursivev, and check for :: to see if current identifier is namespace
+    
+    char *ns_access = strstr(name, "::");
+    if(ns_access)
+    {
+        struct namespace_nested_entry *nse = ns->ns_head;
+        while(nse)
+        {
+            const char *ns_name = nse->ns->ns_name;
+            size_t ns_name_len = strlen(ns_name);
+            if(memcmp(ns_name, name, ns_access - name) == 0)
+            {
+                struct map_entry* maybe_ret = namespace_contains(ctx, ns, ns_access + 2, owning);
+                if(maybe_ret)
+                {
+                    if(owning)
+                        *owning = nse->ns;
+                    return maybe_ret;
+                }
+                else
+                    break; // its not like there's gonna be another nested namespace of the same name, so we're done here
+            }
+            
+            nse = nse->next;
+        }
+    }
+    
+    if(owning)
+        *owning = NULL;
+    return NULL;
+}
+
+int namespace_level(struct namespace_name_list* ns)
+{
+    int ret = 0;
+    while(ns)
+    {
+        ret += 1;
+        ns = ns->parent_ns;
+    }
+    return ret;
+}
+
 // TODO: current problem, do we return the new token we stopped at or what? some of calls to this expect ctx->current to be updated as expected
 struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, struct token* tok, struct scope* _Opt* _Opt ppscope_opt)
 {
@@ -696,7 +744,7 @@ struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, struct token
         *ppscope_opt = NULL; // out
     
     size_t cap = 64;
-    char* fullname = malloc(cap);
+    char* fullname = calloc(cap, 1);
     dynstr_push(fullname, &cap, tok->lexeme);
     
     tok = tok->next;
@@ -708,6 +756,7 @@ struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, struct token
         tok = tok->next;
     }
     
+    int ns_level = 0;
     struct map_entry *ret = NULL;
     struct scope* _Opt scope = ctx->scopes.tail;
     while (scope)
@@ -721,9 +770,7 @@ struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, struct token
             break;
             if(scope == ctx->scopes.head)
             {
-                // TODO use fullname to search the namespace entries
-                
-                ;
+                break;
             }
             else
             {
@@ -733,9 +780,93 @@ struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, struct token
         scope = scope->previous;
     }
     
-    assert(scope == NULL);
-    
-    
+    struct namespace_scope* ns_scope = ctx->current_ns_scope_opt;
+    if(ns_scope)
+    {
+        if(ns_scope->apply_prefix_namespace)
+        {
+            struct apply_prefix_namespace_scope *ap = ns_scope->apply_prefix_namespace;
+            struct namespace_name_list* ns = ap->ns;
+            while(ns)
+            {
+                struct map_entry *found = namespace_contains(ctx, ns, fullname, NULL);
+                if(found)
+                    return found;
+                
+                ns = ns->parent_ns;
+            }
+        }
+        else
+        {
+            struct capture_prefix_namespace_scope* cpn = ns_scope->capture_prefix_namespace;
+            
+            if(strstr(fullname, "::") == NULL)
+            {
+                // omitting the prefix is not allowed if the identifier was captured 
+                
+                struct capture_prefix_entry* mapping = cpn->head;
+                while(mapping)
+                {
+                    struct namespace_identifier_entry *ie = mapping->ns->head;
+                    while(ie)
+                    {
+                        if(ie->captured_prefix && strcmp(ie->captured_prefix, mapping->prefix) == 0)
+                        {
+                            size_t tmpcap = 64;
+                            char *tmp = calloc(tmpcap, 1);
+                            dynstr_push(tmp, &tmpcap, ie->captured_prefix);
+                            dynstr_push(tmp, &tmpcap, ie->identifer);
+                            if(strcmp(fullname, tmp) == 0)
+                            {
+                                free(tmp);
+                                ret = ie->original_identifier;
+                                return ret;
+                                // for now we do this.
+                                // in reality we should error out if another was found
+                            }
+                            free(tmp);
+                        }
+                        
+                        ie = ie->next;
+                    }
+                    
+                    mapping = mapping->next;
+                }
+            }
+            
+            struct IdentFoundRes {
+                int level;
+                struct map_entry* entry;
+            } found = {
+                .level = -1
+            };
+            
+            struct capture_prefix_entry* mapping = cpn->head;
+            while(mapping)
+            {
+                struct namespace_name_list* ns = mapping->ns;
+                
+                while(ns)
+                {
+                    struct namespace_name_list *owning_ns = NULL;
+                    struct map_entry* res = namespace_contains(ctx, ns, fullname, &owning_ns);
+                    if(res) // TODO make sure found is either NULL or higher
+                    {
+                        found = (struct IdentFoundRes){
+                            .entry = res,
+                            .level = namespace_level(owning_ns)
+                        };
+                    }
+                    
+                    ns = ns->parent_ns;
+                }
+                
+                mapping = mapping->next;
+            }
+        }
+        
+    }
+    // TODO use fullname to search the namespace entries
     
     return ret;
 }
