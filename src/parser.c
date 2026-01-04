@@ -737,7 +737,10 @@ int namespace_level(struct namespace_name_list* ns)
     return ret;
 }
 
+static struct token* token_skip_blanks(const struct parser_ctx* ctx, struct token* tk);
+
 // TODO: current problem, do we return the new token we stopped at or what? some of calls to this expect ctx->current to be updated as expected
+// TODO this should probably take string of the full name, instead of tok
 struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, struct token* tok, struct scope* _Opt* _Opt ppscope_opt)
 {
     if (ppscope_opt != NULL)
@@ -747,13 +750,13 @@ struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, struct token
     char* fullname = calloc(cap, 1);
     dynstr_push(fullname, &cap, tok->lexeme);
     
-    tok = tok->next;
+    tok = token_skip_blanks(ctx, tok);
     while(tok->type == '::')
     {
         dynstr_push(fullname, &cap, tok->lexeme);
-        tok = tok->next;
+        tok = token_skip_blanks(ctx, tok);
         dynstr_push(fullname, &cap, tok->lexeme);
-        tok = tok->next;
+        tok = token_skip_blanks(ctx, tok);
     }
     
     int ns_level = 0;
@@ -1645,6 +1648,22 @@ static void parser_skip_blanks(struct parser_ctx* ctx)
     {
         token_promote(ctx, ctx->current); // transform to parser token
     }
+}
+
+static struct token* token_skip_blanks(const struct parser_ctx* ctx, struct token* tk)
+{
+    while (tk && !(tk->flags & TK_FLAG_FINAL))
+    {
+        if (tk)
+            tk = tk->next;
+    }
+    
+    if (tk)
+    {
+        token_promote(ctx, tk); // transform to parser token
+    }
+    
+    return tk;
 }
 
 void parser_match(struct parser_ctx* ctx)
