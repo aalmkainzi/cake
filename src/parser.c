@@ -741,23 +741,10 @@ static struct token* token_skip_blanks(const struct parser_ctx* ctx, struct toke
 
 // TODO: current problem, do we return the new token we stopped at or what? some of calls to this expect ctx->current to be updated as expected
 // TODO this should probably take string of the full name, instead of tok
-struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, struct token* tok, struct scope* _Opt* _Opt ppscope_opt)
+struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, const char *fullname, struct scope* _Opt* _Opt ppscope_opt)
 {
     if (ppscope_opt != NULL)
         *ppscope_opt = NULL; // out
-    
-    size_t cap = 64;
-    char* fullname = calloc(cap, 1);
-    dynstr_push(fullname, &cap, tok->lexeme);
-    
-    tok = token_skip_blanks(ctx, tok);
-    while(tok->type == '::')
-    {
-        dynstr_push(fullname, &cap, tok->lexeme);
-        tok = token_skip_blanks(ctx, tok);
-        dynstr_push(fullname, &cap, tok->lexeme);
-        tok = token_skip_blanks(ctx, tok);
-    }
     
     int ns_level = 0;
     struct map_entry *ret = NULL;
@@ -880,6 +867,7 @@ struct enum_specifier* _Opt find_enum_specifier(struct parser_ctx* ctx, const ch
     struct scope* _Opt scope = ctx->scopes.tail;
     while (scope)
     {
+        // TODO same here
         struct map_entry* _Opt p_entry = hashmap_find(&scope->tags, lexeme);
         if (p_entry &&
             p_entry->type == TAG_TYPE_ENUN_SPECIFIER)
@@ -905,6 +893,9 @@ struct struct_or_union_specifier* _Opt find_struct_or_union_specifier(const stru
     struct scope* _Opt scope = ctx->scopes.tail;
     while (scope)
     {
+        // TODO we must interject here as well.
+        // if it finds it and its file-scope, or it it doesnt find it,
+        // then we must search namespaces
         struct map_entry* _Opt p_entry = hashmap_find(&scope->tags, lexeme);
         if (p_entry &&
             p_entry->type == TAG_TYPE_STRUCT_OR_UNION_SPECIFIER)
@@ -918,9 +909,9 @@ struct struct_or_union_specifier* _Opt find_struct_or_union_specifier(const stru
     return p;
 }
 
-struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, struct token* tok, struct scope** _Opt ppscope_opt)
+struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char *fullname, struct scope** _Opt ppscope_opt)
 {
-    struct map_entry* _Opt p_entry = find_variables(ctx, tok, ppscope_opt);
+    struct map_entry* _Opt p_entry = find_variables(ctx, fullname, ppscope_opt);
 
     if (p_entry)
     {
@@ -939,9 +930,9 @@ struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, struct tok
     return NULL;
 }
 
-struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, struct token* tok, struct scope** _Opt ppscope_opt)
+struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, const char *fullname, struct scope** _Opt ppscope_opt)
 {
-    struct map_entry* _Opt p_entry = find_variables(ctx, tok, ppscope_opt);
+    struct map_entry* _Opt p_entry = find_variables(ctx, fullname, ppscope_opt);
 
     if (p_entry && p_entry->type == TAG_TYPE_ENUMERATOR)
         return p_entry->data.p_enumerator;
