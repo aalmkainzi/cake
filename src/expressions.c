@@ -121,12 +121,12 @@ static int compare_function_arguments(struct parser_ctx* ctx,
     return 0;
 }
 
-bool is_enumeration_constant(const struct parser_ctx* ctx)
+bool is_enumeration_constant(struct parser_ctx* ctx)
 {
     if (ctx->current == NULL)
         return false;
 
-    if (ctx->current->type != TK_IDENTIFIER)
+    if (ctx->current->type != TK_IDENTIFIER && ctx->current->type != '::')
     {
         return false;
     }
@@ -137,7 +137,8 @@ bool is_enumeration_constant(const struct parser_ctx* ctx)
     if (ctx->current->flags & TK_FLAG_IDENTIFIER_IS_NOT_ENUMERATOR)
         return false;
 
-    const bool is_enumerator = find_enumerator(ctx, ctx->current, NULL) != NULL;
+    char* identifier_access = get_current_identifier_access(ctx);
+    const bool is_enumerator = find_enumerator(ctx, identifier_access, NULL) != NULL;
 
     if (is_enumerator)
     {
@@ -1149,7 +1150,10 @@ struct expression* _Owner _Opt primary_expression(struct parser_ctx* ctx, enum e
             p_expression_node->last_token = ctx->current;
 
             struct scope* _Opt p_scope = NULL;
-            struct map_entry* _Opt p_entry = find_variables(ctx, ctx->current, &p_scope);
+            
+            
+            char* identifier_access = get_current_identifier_access(ctx);
+            struct map_entry* _Opt p_entry = find_variables(ctx, identifier_access, &p_scope);
 
             if (p_entry && p_entry->type == TAG_TYPE_ENUMERATOR)
             {

@@ -195,9 +195,11 @@ _Attr(nodiscard)
 int parser_match_tk(struct parser_ctx* ctx, enum token_type type);
 
 struct token* _Opt previous_parser_token(const struct token* token);
-struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, struct token* tok, struct scope** _Opt ppscope_opt);
-struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, struct token* tok, struct scope** _Opt ppscope_opt);
-struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, struct token* tok, struct scope* _Opt* _Opt ppscope_opt);
+char* get_identifier_access(const struct parser_ctx* ctx, struct token* token, struct token** variable_name);
+char* get_current_identifier_access(struct parser_ctx* ctx);
+struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char* name, struct scope** _Opt ppscope_opt);
+struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, const char* name, struct scope** _Opt ppscope_opt);
+struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, const char* name, struct scope* _Opt* _Opt ppscope_opt);
 
 struct struct_or_union_specifier* _Opt find_struct_or_union_specifier(const struct parser_ctx* ctx, const char* lexeme);
 

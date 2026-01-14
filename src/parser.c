@@ -44,6 +44,13 @@
 
 #include <stddef.h>  // for NULL
 
+#define i_implement
+#include "STC/include/stc/cstr.h"
+
+#define STC_IMPLEMENT
+#define T ns_id_entries, struct namespace_identifier_entry*
+#include "STC/include/stc/vec.h"
+
 /*
    Anonymous structs/unions receive a name
 */
@@ -676,6 +683,7 @@ struct map_entry* _Opt find_tag(struct parser_ctx* ctx, const char* lexeme)
     return NULL;
 }
 
+[[nodiscard]]
 char* dynstr_push(char* str, size_t* cap, char* topush)
 {
     size_t len = strlen(str);
@@ -687,6 +695,7 @@ char* dynstr_push(char* str, size_t* cap, char* topush)
         str = realloc(str, *cap);
     }
     strcat(str, topush);
+    return str;
 }
 
 // TODO: add another param
@@ -694,8 +703,6 @@ char* dynstr_push(char* str, size_t* cap, char* topush)
 // actually not another param, but a check after calling this.
 struct map_entry* namespace_contains(const struct parser_ctx* ctx, struct namespace_name_list* ns, const char *name, struct namespace_name_list **owning)
 {
-    // TODO this needs to be recursivev, and check for :: to see if current identifier is namespace
-    
     char *ns_access = strstr(name, "::");
     if(ns_access)
     {
@@ -706,11 +713,9 @@ struct map_entry* namespace_contains(const struct parser_ctx* ctx, struct namesp
             size_t ns_name_len = strlen(ns_name);
             if(memcmp(ns_name, name, ns_access - name) == 0)
             {
-                struct map_entry* maybe_ret = namespace_contains(ctx, ns, ns_access + 2, owning);
+                struct map_entry* maybe_ret = namespace_contains(ctx, nse->ns, ns_access + 2, owning);
                 if(maybe_ret)
                 {
-                    if(owning)
-                        *owning = nse->ns;
                     return maybe_ret;
                 }
                 else
@@ -718,6 +723,20 @@ struct map_entry* namespace_contains(const struct parser_ctx* ctx, struct namesp
             }
             
             nse = nse->next;
+        }
+    }
+    else
+    {
+        struct namespace_identifier_entry* entry = ns->head;
+        while(entry)
+        {
+            if(strcmp(entry->identifer, name) == 0)
+            {
+                if(owning)
+                    *owning = ns;
+                return entry->original_identifier;
+            }
+            entry = entry->next;
         }
     }
     
@@ -804,8 +823,8 @@ struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, const char *
                         {
                             size_t tmpcap = 64;
                             char *tmp = calloc(tmpcap, 1);
-                            dynstr_push(tmp, &tmpcap, ie->captured_prefix);
-                            dynstr_push(tmp, &tmpcap, ie->identifer);
+                            tmp = dynstr_push(tmp, &tmpcap, ie->captured_prefix);
+                            tmp = dynstr_push(tmp, &tmpcap, ie->identifer);
                             if(strcmp(fullname, tmp) == 0)
                             {
                                 free(tmp);
@@ -909,9 +928,31 @@ struct struct_or_union_specifier* _Opt find_struct_or_union_specifier(const stru
     return p;
 }
 
-struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char *fullname, struct scope** _Opt ppscope_opt)
+struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char *name, struct scope** _Opt ppscope_opt)
 {
-    struct map_entry* _Opt p_entry = find_variables(ctx, fullname, ppscope_opt);
+    struct map_entry* _Opt p_entry = find_variables(ctx, name, ppscope_opt);
+
+    if (p_entry)
+    {
+        if (p_entry->type == TAG_TYPE_INIT_DECLARATOR)
+        {
+            assert(p_entry->data.p_init_declarator != NULL);
+            struct init_declarator* p_init_declarator = p_entry->data.p_init_declarator;
+            return (struct declarator*)p_init_declarator->p_declarator;
+        }
+        else if (p_entry->type == TAG_TYPE_DECLARATOR)
+        {
+            return p_entry->data.p_declarator;
+        }
+    }
+
+    return NULL;
+}
+
+struct declarator* _Opt find_declarator_k(const struct parser_ctx* ctx, const char *name, struct scope** _Opt ppscope_opt, char **key)
+{
+    struct map_entry* _Opt p_entry = find_variables(ctx, name, ppscope_opt);
+    *key = p_entry->key;
 
     if (p_entry)
     {
@@ -943,7 +984,7 @@ struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, const char
 bool first_of_typedef_name(const struct parser_ctx* ctx, struct token* p_token)
 {
 
-    if (p_token->type != TK_IDENTIFIER)
+    if (p_token->type != TK_IDENTIFIER && p_token->type != '::')
     {
         // no need to check
         return false;
@@ -959,7 +1000,8 @@ bool first_of_typedef_name(const struct parser_ctx* ctx, struct token* p_token)
         return false;
     }
 
-    struct declarator* _Opt p_declarator = find_declarator(ctx, p_token, NULL);
+    char* identifier_access = get_identifier_access(ctx, p_token, NULL);
+    struct declarator* _Opt p_declarator = find_declarator(ctx, identifier_access, NULL);
 
     if (p_declarator &&
         p_declarator->declaration_specifiers &&
@@ -1645,8 +1687,7 @@ static struct token* token_skip_blanks(const struct parser_ctx* ctx, struct toke
 {
     while (tk && !(tk->flags & TK_FLAG_FINAL))
     {
-        if (tk)
-            tk = tk->next;
+        tk = tk->next;
     }
     
     if (tk)
@@ -1656,6 +1697,48 @@ static struct token* token_skip_blanks(const struct parser_ctx* ctx, struct toke
     
     return tk;
 }
+
+// returns full access spelling, including namespaces and colons
+char* get_identifier_access(const struct parser_ctx* ctx, struct token* token, struct token** variable_name)
+{
+    size_t cap = 16;
+    char* ret = calloc(cap, 1);
+    
+    while(token->type == TK_IDENTIFIER || token->type == '::')
+    {
+        if(variable_name)
+            *variable_name = token;
+        ret = dynstr_push(ret, &cap, token->lexeme);
+        token = token_skip_blanks(ctx, token);
+    }
+    
+    return ret;
+}
+
+char* get_current_identifier_access(struct parser_ctx* ctx)
+{
+    size_t cap = 16;
+    char* ret = calloc(cap, 1);
+    
+    struct token* current_save = ctx->current;
+    struct token* previous_save = ctx->previous;
+    
+    while(ctx->current->type == TK_IDENTIFIER || ctx->current->type == '::')
+    {
+        current_save = ctx->current;
+        previous_save = ctx->previous;
+        
+        ret = dynstr_push(ret, &cap, ctx->current->lexeme);
+        parser_match(ctx);
+    }
+    
+    // undo the last parser_match, the caller probably expects ctx->current to be at the variable name
+    ctx->current = current_save;
+    ctx->previous = previous_save;
+    
+    return ret;
+}
+
 
 void parser_match(struct parser_ctx* ctx)
 {
@@ -1963,11 +2046,12 @@ struct declaration_specifiers* _Owner _Opt declaration_specifiers(struct parser_
                     {
                         p_declaration_specifiers->typeof_specifier = p_declaration_specifier->type_specifier_qualifier->type_specifier->typeof_specifier;
                     }
-                    else if (p_declaration_specifier->type_specifier_qualifier->type_specifier->token->type == TK_IDENTIFIER)
+                    else if (p_declaration_specifier->type_specifier_qualifier->type_specifier->token->type == TK_IDENTIFIER || p_declaration_specifier->type_specifier_qualifier->type_specifier->token->type == '::')
                     {
+                        char* identifier_access = get_identifier_access(ctx, p_declaration_specifier->type_specifier_qualifier->type_specifier->token, NULL);
                         p_declaration_specifiers->typedef_declarator =
                             find_declarator(ctx,
-                                p_declaration_specifier->type_specifier_qualifier->type_specifier->token,
+                                identifier_access,
                                 NULL);
 
                         // p_declaration_specifiers->typedef_declarator = p_declaration_specifier->type_specifier_qualifier->pType_specifier->token->lexeme;
@@ -2462,11 +2546,13 @@ struct declaration* _Owner _Opt declaration(struct parser_ctx* ctx,
                    Now we have the function body, let's see if we had a previous
                    function body.
                 */
-                struct token* func_tok =
-                    p_declaration->init_declarator_list.head->p_declarator->name_opt;
+                
+                // TODO is p_declaration->init_declarator_list.head->p_declarator->name_opt even being set correctly? verify
+                char* func_access =
+                    get_identifier_access(ctx, p_declaration->init_declarator_list.head->p_declarator->name_opt, NULL);
 
                 struct scope* _Opt p_previous_scope = NULL;
-                struct declarator* _Opt p_previous_declarator = find_declarator(ctx, func_tok, &p_previous_scope);
+                struct declarator* _Opt p_previous_declarator = find_declarator(ctx, func_access, &p_previous_scope);
                 if (p_previous_declarator && p_previous_declarator != p_declaration->init_declarator_list.head->p_declarator)
                 {
                     p_previous_declarator->p_complete_declarator = p_declaration->init_declarator_list.head->p_declarator;
@@ -2703,9 +2789,12 @@ struct init_declarator* _Owner _Opt init_declarator(struct parser_ctx* ctx,
         }
 
         /////////////////////////////////////////////////////////////////////////////
-        const char* declarator_name = p_init_declarator->p_declarator->name_opt->lexeme;
+        struct token* vartok;
+        char* identifer_access = get_identifier_access(ctx, p_init_declarator->p_declarator->name_opt, &vartok);
         struct scope* _Opt out_scope = NULL;
-        struct declarator* _Opt p_previous_declarator = find_declarator(ctx, p_init_declarator->p_declarator->name_opt, &out_scope);
+
+        char* declarator_name;
+        struct declarator* _Opt p_previous_declarator = find_declarator_k(ctx, identifer_access, &out_scope, &declarator_name);
         if (p_previous_declarator)
         {
             p_init_declarator->p_declarator->p_complete_declarator = p_previous_declarator;
@@ -11205,8 +11294,62 @@ struct namespace_name_list *get_namespace(struct parser_ctx *ctx, char *name, st
     }
 }
 
+// Takes an identifier access, returns the fully prefixed name. Takes into account current namespace scope
+char* get_identifier_prefixed_name(const struct parser_ctx* ctx, const char* identifier_access, _Opt struct namespace_scope *ns_scope, struct ns_id_entries* slots_to_fill)
+{
+    // TODO take into account if the current scope is capture-prefix and captures the same prefix as the identifier (if so, then it must contain it, otherwise it doesn't refer to it)
+    
+    /*
+        Rules:
+            - apply-prefix applies prefix if we are in it
+    */
+    
+    // in this loop we push to slots_to_fill
+    
+    char* found_fully_prefixed = NULL;
+    
+    struct namespace_scope* scope_it = ns_scope;
+    while(scope_it->capture_prefix_namespace)
+    {
+        struct capture_prefix_entry *cpe = scope_it->capture_prefix_namespace->head;
+        while(cpe)
+        {
+            char* prefix = cpe->prefix;
+            size_t prefix_len = strlen(prefix);
+            size_t alen = strlen(identifier_access);
+            if(alen > prefix_len && memcmp(identifier_access, prefix, prefix_len) == 0)
+            {
+                struct map_entry *found_entry = namespace_contains(ctx, cpe->ns, identifier_access + prefix_len, NULL);
+                if(found_entry)
+                {
+                    found_fully_prefixed = found_entry->key;
+                    goto upper_scope; // mappings work like this, if match found, no other mapping is considered
+                }
+                else
+                {
+                    struct namespace_identifier_entry* new_entry = calloc(1, sizeof(struct namespace_identifier_entry));
+                    
+                    new_entry->next = cpe->ns->head;
+                    new_entry->captured_prefix = prefix;
+                    cpe->ns->head = new_entry;
+                    
+                    ns_id_entries_push(slots_to_fill, new_entry);
+                }
+            }
+            
+            cpe = cpe->next;
+        }
+        
+        upper_scope:
+        scope_it = scope_it->prev;
+    }
+    
+    return (char*) identifier_access;
+}
+
 char* unquote(const char* str)
 {
+    assert(str[0] == '\"' && str[strlen(str) - 1] == '\"');
     char* ret = strdup(str + 1);
     ret[strlen(ret) - 1] = '\0';
     return ret;
