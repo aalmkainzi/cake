@@ -20,6 +20,7 @@
 struct scope
 {
     int scope_level;
+    struct hash_map np_aliases;
     struct hash_map tags;
     struct hash_map variables;
 
@@ -112,10 +113,46 @@ void diagnostic_queue_destroy(_Dtor struct diagnostic_queue* q);
 
 int parse_diagnostic_suppression(const char* p, int ids[], int ids_max);
 
+struct nameprefix_entry
+{
+    struct map_entry *entry;
+    struct nameprefix_entry *next;
+};
+
+struct nameprefix
+{
+    const char *name;
+    const char *prefix;
+
+    struct nameprefix_entry *tag_entries;
+    struct nameprefix_entry *var_entries;
+
+    struct nameprefix *nested_nps;
+
+    struct nameprefix *parent;
+    struct nameprefix *next;
+};
+
+struct nameprefix_alias
+{
+    const char *name;
+    struct nameprefix *np;
+};
+
+struct nameprefix_scope
+{
+    bool is_capture;
+    struct nameprefix *np;
+
+    struct nameprefix_scope *next;
+};
 
 struct parser_ctx
 {
     struct options options;
+
+    struct nameprefix *outer_nameprefixes;
+    struct nameprefix_scope *np_scopes;
 
     /*
       file scope -> function params -> function -> inner scope

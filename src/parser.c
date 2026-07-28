@@ -3,6 +3,8 @@
  *  https://github.com/thradams/cake
 */
 
+#include "options.h"
+#include "token.h"
 #pragma safety enable
 
 #include "ownership.h"
@@ -1806,6 +1808,13 @@ enum token_type is_keyword(const char* text, enum target target)
 
         if (strcmp("_Countof", text) == 0)
             return TK_KEYWORD__COUNTOF; /* C2Y */
+
+        if (strcmp("_Nameprefix", text) == 0)
+            return TK_KEYWORD__NAMEPREFIX;
+        if (strcmp("_Apply", text) == 0)
+            return TK_KEYWORD__APPLY;
+        if (strcmp("_Capture", text) == 0)
+            return TK_KEYWORD__CAPTURE;
 
         /*TRAITS EXTENSION*/
         if (strcmp("_is_lvalue", text) == 0)
@@ -12272,6 +12281,164 @@ static void check_unused_static_declarators(struct parser_ctx* ctx, struct decla
     }
 }
 
+static struct nameprefix* find_nameprefix(const char* name, struct nameprefix* head)
+{
+    struct nameprefix* it = head;
+    while (it)
+    {
+        if (strcmp(it->name, name) == 0)
+            return it;
+        it = it->next;
+    }
+    return NULL;
+}
+
+static struct nameprefix* find_nested_nameprefix(struct token_list *names, struct nameprefix* head, struct token** not_found_tok)
+{
+    struct token* it = names->head;
+    struct nameprefix* np_it = head;
+    while (it)
+    {
+        struct nameprefix* found = find_nameprefix(it->lexeme, head);
+        if (!found)
+        {
+            *not_found_tok = it;
+            return NULL;
+        }
+        np_it = found;
+    }
+    return np_it;
+}
+
+static void push_nameprefix(struct nameprefix** head, struct nameprefix* new_np)
+{
+    if (*head == NULL)
+    {
+        *head = new_np;
+    }
+    else
+    {
+        struct nameprefix* it = *head;
+        while(it->next)
+        {
+            it = it->next;
+        }
+        it->next = new_np;
+    }
+}
+
+static void nameprefix(struct parser_ctx* ctx)
+{
+    parser_match(ctx); // skip _Nameprefix
+
+    struct token_list parents_list = {};
+    
+    try
+    {
+        struct token *last_name = NULL;
+        while(1)
+        {
+            struct token* next = parser_look_ahead(ctx);
+            if (next->type == '::')
+            {
+                token_list_add(&parents_list, clone_token(ctx->current));
+                if (parser_match_tk(ctx, TK_IDENTIFIER))
+                    throw;
+                if (parser_match_tk(ctx, '::'))
+                    throw;
+            }
+            else
+            {
+                last_name = ctx->current;
+                if (parser_match_tk(ctx, TK_IDENTIFIER))
+                    throw;
+                break;
+            }
+        }
+
+        struct nameprefix* found;
+        struct nameprefix* found_parent;
+        if (parents_list.head)
+        {
+            struct token* not_found_tok;
+            found_parent = find_nested_nameprefix(&parents_list, ctx->outer_nameprefixes, &not_found_tok);
+            if (!found_parent)
+            {
+                diagnostic(C_ERROR_NOT_FOUND,
+                           ctx,
+                           not_found_tok,
+                           NULL,
+                           "_Nameprefix not found");
+                throw;
+            }
+
+            found = find_nameprefix(last_name->lexeme, found_parent->nested_nps);
+        }
+        else
+        {
+            found = find_nameprefix(last_name->lexeme, ctx->outer_nameprefixes);
+        }
+
+        if (parser_match_tk(ctx, '='))
+            throw;
+
+        if (ctx->current->type == TK_STRING_LITERAL)
+        {
+            struct token* prefix_tok = ctx->current;
+            if (found)
+            {
+                if (strcmp(prefix_tok->lexeme, found->prefix) != 0)
+                {
+                    diagnostic(C_ERROR_TAG_TYPE_DOES_NOT_MATCH_PREVIOUS_DECLARATION,
+                            ctx,
+                            prefix_tok,
+                            NULL,
+                            "_Nameprefix does not match previous declaration");
+                    throw;
+                }
+                if (parser_match_tk(ctx, TK_STRING_LITERAL))
+                    throw;
+                if (parser_match_tk(ctx, TK_SEMICOLON))
+                    throw;
+
+                return; // np already exists and identical, this is a repeated declaration
+            }
+
+            // now we are sure this is a new nameprefix declaration
+            struct nameprefix *np = calloc(1, sizeof * np);
+            np->prefix = prefix_tok->lexeme;
+            np->name = last_name->lexeme;
+
+            if (found_parent)
+                push_nameprefix(&found_parent->nested_nps, np);
+            else
+                push_nameprefix(&ctx->outer_nameprefixes, np);
+        }
+        else if (ctx->current->type == TK_IDENTIFIER)
+        {
+            if (parents_list.head != NULL)
+            {
+                diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, NULL, "_Nameprefix declaration must be assigned with a string literal");
+            }
+            puts("nameprefix alias");
+            // TODO alias
+        }
+        else
+        {
+            diagnostic(C_ERROR_UNEXPECTED_TOKEN,
+                       ctx,
+                       ctx->current,
+                       NULL,
+                       found_parent ? "expected string literal" : "expected string literal, or an existing _Nameprefix");
+            throw;
+        }
+    }
+    catch
+    {
+        token_list_clear(&parents_list);
+    }
+}
+
 struct declaration* _Owner _Opt external_declaration(struct parser_ctx* ctx)
 {
     /*
@@ -12303,6 +12470,12 @@ struct declaration_list translation_unit(struct parser_ctx* ctx, bool* berror)
                 */
                 struct asm_statement* _Opt _Owner p3 = gcc_asm(ctx, true);
                 asm_statement_delete(p3);
+            }
+
+            if (ctx->current->type == TK_KEYWORD__NAMEPREFIX)
+            {
+                nameprefix(ctx);
+                continue;
             }
 
             struct declaration* _Owner _Opt p = external_declaration(ctx);
