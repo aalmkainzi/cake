@@ -12327,12 +12327,21 @@ static void push_nameprefix(struct nameprefix** head, struct nameprefix* new_np)
     }
 }
 
+static char *unquote(char *s)
+{
+    size_t len = strlen(s);
+    s += 1;
+    s[len - 1] = 0;
+    return s;
+}
+
 static void nameprefix(struct parser_ctx* ctx)
 {
     parser_match(ctx); // skip _Nameprefix
 
     struct token_list parents_list = {};
-    
+    struct nameprefix *new_nameprefix = NULL;
+
     try
     {
         struct token *last_name = NULL;
@@ -12384,6 +12393,25 @@ static void nameprefix(struct parser_ctx* ctx)
 
         if (ctx->current->type == TK_STRING_LITERAL)
         {
+            if (ctx->scopes.head->previous != NULL)
+            {
+                diagnostic(C_ERROR_OUTER_SCOPE,
+                           ctx,
+                           last_name,
+                           NULL,
+                           "_Nameprefix must be declared in file scope");
+                throw;
+            }
+            if (ctx->nameprefix_scope && !ctx->nameprefix_scope->is_capture)
+            {
+                diagnostic(C_ERROR_TAG_TYPE_DOES_NOT_MATCH_PREVIOUS_DECLARATION,
+                           ctx,
+                           last_name,
+                           NULL,
+                           "cannot declare _Nameprefix inside an _Apply scope");
+                throw;
+            }
+
             struct token* prefix_tok = ctx->current;
             if (found)
             {
@@ -12405,23 +12433,38 @@ static void nameprefix(struct parser_ctx* ctx)
             }
 
             // now we are sure this is a new nameprefix declaration
-            struct nameprefix *np = calloc(1, sizeof * np);
-            np->prefix = prefix_tok->lexeme;
-            np->name = last_name->lexeme;
+            new_nameprefix = calloc(1, sizeof * new_nameprefix);
+            new_nameprefix->prefix = unquote(strdup(prefix_tok->lexeme)); // TODO validate prefix
+            new_nameprefix->name = strdup(last_name->lexeme);
 
             if (found_parent)
-                push_nameprefix(&found_parent->nested_nps, np);
+                push_nameprefix(&found_parent->nested_nps, new_nameprefix);
             else
-                push_nameprefix(&ctx->outer_nameprefixes, np);
+                push_nameprefix(&ctx->outer_nameprefixes, new_nameprefix);
         }
         else if (ctx->current->type == TK_IDENTIFIER)
         {
             if (parents_list.head != NULL)
             {
-                diagnostic(C_ERROR_UNEXPECTED_TOKEN, ctx, ctx->current, NULL, "_Nameprefix declaration must be assigned with a string literal");
+                diagnostic(C_ERROR_UNEXPECTED_TOKEN,
+                           ctx,
+                           ctx->current,
+                           NULL,
+                           "_Nameprefix declaration must be assigned to with a string literal");
+                throw;
             }
             puts("nameprefix alias");
-            // TODO alias
+
+            struct map_entry *found_alias = hashmap_find(&ctx->scopes.tail->np_aliases, ctx->current->lexeme);
+            if (found_alias)
+            {
+                diagnostic(C_ERROR_REDECLARATION,
+                           ctx,
+                           last_name,
+                           NULL,
+                           "_Nameprefix alias already declared in scope");
+                throw;
+            }
         }
         else
         {
@@ -12435,8 +12478,10 @@ static void nameprefix(struct parser_ctx* ctx)
     }
     catch
     {
-        token_list_clear(&parents_list);
+        if (new_nameprefix)
+            free(new_nameprefix);
     }
+    token_list_clear(&parents_list);
 }
 
 struct declaration* _Owner _Opt external_declaration(struct parser_ctx* ctx)

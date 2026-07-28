@@ -144,7 +144,8 @@ struct nameprefix_scope
     bool is_capture;
     struct nameprefix *np;
 
-    struct nameprefix_scope *next;
+    struct nameprefix_scope *up;
+    struct nameprefix_scope *down;
 };
 
 struct parser_ctx
@@ -152,7 +153,7 @@ struct parser_ctx
     struct options options;
 
     struct nameprefix *outer_nameprefixes;
-    struct nameprefix_scope *np_scopes;
+    struct nameprefix_scope *nameprefix_scope;
 
     /*
       file scope -> function params -> function -> inner scope
