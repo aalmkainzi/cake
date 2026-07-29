@@ -153,7 +153,7 @@ struct parser_ctx
     struct options options;
 
     struct nameprefix *outer_nameprefixes;
-    struct nameprefix_scope *nameprefix_scope;
+    struct nameprefix_scope *nameprefix_scope; // the current scope. when popping, becomes its up
 
     /*
       file scope -> function params -> function -> inner scope
