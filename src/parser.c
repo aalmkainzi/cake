@@ -12335,7 +12335,36 @@ static char *unquote(char *s)
     return s;
 }
 
-static void nameprefix(struct parser_ctx* ctx)
+// given `A::B::C` => {A, B}, and sets `last_name` to `C`
+// if *last_name is NULL, error occured
+static struct token_list extract_nameprefixes_from_usage(struct parser_ctx* ctx, struct token** last_name)
+{
+    *last_name = NULL;
+    struct token_list parents_list = {};
+    while(1)
+    {
+        struct token* next = parser_look_ahead(ctx);
+        if (next->type == '::')
+        {
+            token_list_add(&parents_list, clone_token(ctx->current));
+            if (parser_match_tk(ctx, TK_IDENTIFIER))
+                break;
+            if (parser_match_tk(ctx, '::'))
+                break;
+        }
+        else
+        {
+            struct token* name_tok = ctx->current;
+            if (parser_match_tk(ctx, TK_IDENTIFIER))
+                break;
+            *last_name = name_tok;
+            break;
+        }
+    }
+    return parents_list;
+}
+
+static void parse_nameprefix(struct parser_ctx* ctx)
 {
     parser_match(ctx); // skip _Nameprefix
 
@@ -12344,26 +12373,11 @@ static void nameprefix(struct parser_ctx* ctx)
 
     try
     {
-        struct token *last_name = NULL;
-        while(1)
-        {
-            struct token* next = parser_look_ahead(ctx);
-            if (next->type == '::')
-            {
-                token_list_add(&parents_list, clone_token(ctx->current));
-                if (parser_match_tk(ctx, TK_IDENTIFIER))
-                    throw;
-                if (parser_match_tk(ctx, '::'))
-                    throw;
-            }
-            else
-            {
-                last_name = ctx->current;
-                if (parser_match_tk(ctx, TK_IDENTIFIER))
-                    throw;
-                break;
-            }
-        }
+        struct token *last_name;
+        parents_list = extract_nameprefixes_from_usage(ctx, &last_name);
+
+        if (last_name == NULL)
+            throw;
 
         struct nameprefix* found;
         struct nameprefix* found_parent;
@@ -12519,8 +12533,16 @@ struct declaration_list translation_unit(struct parser_ctx* ctx, bool* berror)
 
             if (ctx->current->type == TK_KEYWORD__NAMEPREFIX)
             {
-                nameprefix(ctx);
+                parse_nameprefix(ctx);
                 continue;
+            }
+            else if (ctx->current->type == TK_KEYWORD__APPLY)
+            {
+                
+            }
+            else if (ctx->current->type == TK_KEYWORD__CAPTURE)
+            {
+                
             }
 
             struct declaration* _Owner _Opt p = external_declaration(ctx);
