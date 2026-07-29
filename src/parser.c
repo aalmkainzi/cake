@@ -81,6 +81,8 @@ void naming_convention_local_var(struct parser_ctx* ctx, struct token* token, st
 static void check_knr_brace_space_style(struct parser_ctx* ctx, struct token* token);
 static bool trying_to_use_vm_type_from_enclosing_function(const struct type* p_type, struct declarator* p_function);
 
+static void parse_nameprefix_alias_rhs(struct parser_ctx* ctx, struct token* last_name);
+
 static void check_open_brace_style(struct parser_ctx* ctx, struct token* token)
 {
     /* token points to { */
@@ -10643,7 +10645,21 @@ struct block_item* _Owner _Opt block_item(struct parser_ctx* ctx)
 
         check_indentation_style(ctx, ctx->current);
 
-        if (first_of_declaration_specifier(ctx) ||
+        if (ctx->current->type == TK_KEYWORD__NAMEPREFIX)
+        {
+            p_block_item->np_alias = calloc(1, sizeof * p_block_item->np_alias);
+            if (parser_match_tk(ctx, TK_KEYWORD__NAMEPREFIX))
+                throw;
+
+            struct token* alias_name = ctx->current;
+            if (parser_match_tk(ctx, TK_IDENTIFIER))
+                throw;
+            if (parser_match_tk(ctx, TK_EQUALS_SIGN))
+                throw;
+
+            parse_nameprefix_alias_rhs(ctx, alias_name);
+        }
+        else if (first_of_declaration_specifier(ctx) ||
             first_of_pragma_declaration(ctx) ||
             first_of_static_assertion_declaration(ctx))
         {
@@ -12281,7 +12297,7 @@ static void check_unused_static_declarators(struct parser_ctx* ctx, struct decla
     }
 }
 
-static struct nameprefix* find_nameprefix(const char* name, struct nameprefix* head)
+static struct nameprefix* find_nameprefix_in_list(const char* name, struct nameprefix* head)
 {
     struct nameprefix* it = head;
     while (it)
@@ -12293,38 +12309,95 @@ static struct nameprefix* find_nameprefix(const char* name, struct nameprefix* h
     return NULL;
 }
 
-static struct nameprefix* find_nested_nameprefix(struct token_list *names, struct nameprefix* head, struct token** not_found_tok)
+static struct nameprefix* find_nested_nameprefix_in_list(struct token_list *names, struct nameprefix* head, struct token** not_found_tok)
 {
     struct token* it = names->head;
     struct nameprefix* np_it = head;
     while (it)
     {
-        struct nameprefix* found = find_nameprefix(it->lexeme, head);
+        struct nameprefix* found = find_nameprefix_in_list(it->lexeme, np_it);
         if (!found)
         {
             *not_found_tok = it;
             return NULL;
         }
+        it = it->next;
         np_it = found;
     }
     return np_it;
 }
 
-static void push_nameprefix(struct nameprefix** head, struct nameprefix* new_np)
+static bool in_apply_prefix_file_scope(struct parser_ctx* ctx)
 {
-    if (*head == NULL)
+    return ctx->scopes.tail->previous == NULL && (ctx->nameprefix_scope && !ctx->nameprefix_scope->is_capture);
+}
+
+// TODO if caller is sure rhs is entirely namespace
+// make sure the caller has the entire name in `names` including C
+// `A::B::C`
+static struct nameprefix* find_nested_nameprefix(struct parser_ctx* ctx, struct token_list *names, struct token** not_found_tok)
+{
+    if (in_apply_prefix_file_scope(ctx))
     {
-        *head = new_np;
+        struct nameprefix* cur = ctx->nameprefix_scope->np;
+        struct nameprefix* found = NULL;
+        while (!found && cur)
+        {
+            found = find_nested_nameprefix_in_list(names, cur->nested_nps, not_found_tok);
+            cur = cur->parent;
+        }
+        if (found)
+            return found;
+    }
+
+    // TODO search aliases
+    struct token* first_name = names->head;
+    struct scope* scope_it = ctx->scopes.tail;
+    while(scope_it)
+    {
+        struct map_entry* entry = hashmap_find(&scope_it->np_aliases, first_name->lexeme);
+        if (entry)
+        {
+            struct nameprefix_alias* alias = entry->data.p_nameprefix_alias;
+            struct nameprefix* np = alias->np;
+            find_
+            return;
+        }
+        scope_it = scope_it->previous;
+    }
+
+    // search outer nameprefixes
+    struct nameprefix* found = find_nested_nameprefix_in_list(names, ctx->outer_nameprefixes, not_found_tok);
+    return found;
+}
+
+static void push_nameprefix(struct parser_ctx* ctx, struct nameprefix* parent, struct nameprefix* new_np)
+{
+    new_np->parent = parent;
+
+    struct nameprefix* it;
+    if (parent == NULL)
+    {
+        new_np->parent = ctx->outer_nameprefixes; // _Global
+        it = ctx->outer_nameprefixes;
+        // outer_nameprefixes always has at least has one _Nameprefix, that being _Global
     }
     else
     {
-        struct nameprefix* it = *head;
-        while(it->next)
+        if (parent->nested_nps == NULL)
         {
-            it = it->next;
+            parent->nested_nps = new_np;
+            return;
         }
-        it->next = new_np;
+
+        it = parent->nested_nps;
     }
+
+    while(it->next)
+    {
+        it = it->next;
+    }
+    it->next = new_np;
 }
 
 static char *unquote(char *s)
@@ -12335,9 +12408,10 @@ static char *unquote(char *s)
     return s;
 }
 
-// given `A::B::C` => {A, B}, and sets `last_name` to `C`
+// given `A::B::C` returns {A, B}, and sets `last_name` to `C`
 // if *last_name is NULL, error occured
-static struct token_list extract_nameprefixes_from_usage(struct parser_ctx* ctx, struct token** last_name)
+// ctx->current becomes after C
+static struct token_list consume_ident_coloncolon_list(struct parser_ctx* ctx, struct token** last_name)
 {
     *last_name = NULL;
     struct token_list parents_list = {};
@@ -12364,27 +12438,155 @@ static struct token_list extract_nameprefixes_from_usage(struct parser_ctx* ctx,
     return parents_list;
 }
 
+// ignores quotes
+static char *validate_prefix(const char *prefix)
+{
+    size_t len = strlen(prefix);
+    assert(len >= 2); // at least ""
+
+    if (!isalpha(prefix[1]) && prefix[1] != '_')
+        return NULL;
+    for (size_t i = 2 ; i < len - 1 ; i++)
+    {
+        if (!isalnum(prefix[i]) && prefix[i] != '_')
+        {
+            return NULL;
+        }
+    }
+    return (char*)prefix;
+}
+
+static void nameprefix_clear(struct nameprefix* np)
+{
+    if (np == NULL)
+        return;
+
+    free(np->prefix - 1);
+    free(np->name);
+
+    // TODO free entries
+    struct nameprefix* it = np->nested_nps;
+    while (it)
+    {
+        nameprefix_clear(it);
+        it = it->next;
+    }
+    free(np);
+}
+
+static void nameprefix_alias_clear(struct nameprefix_alias* alias)
+{
+    if (alias == NULL)
+        return;
+
+    free(alias->name);
+    free(alias);
+}
+
+static void parse_nameprefix_alias_rhs(struct parser_ctx* ctx, struct token* alias_name_tok)
+{
+    struct nameprefix_alias* alias = NULL;
+
+    try
+    {
+        struct map_entry* alias_in_scope = hashmap_find(&ctx->scopes.tail->np_aliases, alias_name_tok->lexeme);
+        bool file_scope = ctx->scopes.tail->previous == NULL;
+        
+        if (in_apply_prefix_file_scope(ctx))
+        {
+            diagnostic(C_ERROR_REDECLARATION,
+                    ctx,
+                    alias_name_tok,
+                    NULL,
+                    "cannot create _Nameprefix alias inside an _Apply scope");
+            throw;
+        }
+        if (file_scope && (find_nameprefix_in_list(alias_name_tok->lexeme, ctx->outer_nameprefixes)))
+        {
+            diagnostic(C_ERROR_REDECLARATION,
+                    ctx,
+                    alias_name_tok,
+                    NULL,
+                    "_Nameprefix alias cannot have the same name as a _Nameprefix");
+            throw;
+        }
+        if (alias_in_scope)
+        {
+            diagnostic(C_ERROR_REDECLARATION,
+                    ctx,
+                    alias_name_tok,
+                    NULL,
+                    "_Nameprefix alias already declared in scope");
+            throw;
+        }
+
+        struct token* last_np;
+        struct token_list parents = consume_ident_coloncolon_list(ctx, &last_np);
+
+        if (last_np == NULL)
+            throw;
+
+        struct token* not_found_tok;
+        struct nameprefix* found_parent = find_nested_nameprefix(ctx, &parents, &not_found_tok);
+
+        if (!found_parent)
+        {
+            diagnostic(C_ERROR_NOT_FOUND,
+                    ctx,
+                    not_found_tok,
+                    NULL,
+                    "_Nameprefix not found");
+            throw;
+        }
+        
+        struct nameprefix* found_nameprefix = find_nameprefix_in_list(last_np->lexeme, found_parent);
+        
+        if (!found_nameprefix)
+        {
+            diagnostic(C_ERROR_NOT_FOUND,
+                    ctx,
+                    last_np,
+                    NULL,
+                    "_Nameprefix not found");
+            throw;
+        }
+        
+        alias = calloc(1, sizeof * alias);
+        alias->name = alias_name_tok->lexeme;
+        alias->np = found_nameprefix;
+        struct hash_item_set item = {.p_nameprefix_alias = alias};
+        hashmap_set(&ctx->scopes.tail->np_aliases, alias_name_tok->lexeme, &item);
+        
+        if (parser_match_tk(ctx, TK_SEMICOLON))
+            ; // dont throw, user forgot semicolon. its fine
+    }
+    catch
+    {
+        nameprefix_alias_clear(alias);
+    }
+}
+
 static void parse_nameprefix(struct parser_ctx* ctx)
 {
     parser_match(ctx); // skip _Nameprefix
 
     struct token_list parents_list = {};
     struct nameprefix *new_nameprefix = NULL;
-
+    struct nameprefix_alias* alias = NULL;
     try
     {
         struct token *last_name;
-        parents_list = extract_nameprefixes_from_usage(ctx, &last_name);
+        parents_list = consume_ident_coloncolon_list(ctx, &last_name);
 
         if (last_name == NULL)
             throw;
 
-        struct nameprefix* found;
-        struct nameprefix* found_parent;
+        struct nameprefix* found = NULL;
+        struct nameprefix* found_parent = NULL;
         if (parents_list.head)
         {
             struct token* not_found_tok;
-            found_parent = find_nested_nameprefix(&parents_list, ctx->outer_nameprefixes, &not_found_tok);
+            found_parent = find_nested_nameprefix(ctx, &parents_list, &not_found_tok);
             if (!found_parent)
             {
                 diagnostic(C_ERROR_NOT_FOUND,
@@ -12395,11 +12597,11 @@ static void parse_nameprefix(struct parser_ctx* ctx)
                 throw;
             }
 
-            found = find_nameprefix(last_name->lexeme, found_parent->nested_nps);
+            found = find_nameprefix_in_list(last_name->lexeme, found_parent->nested_nps);
         }
         else
         {
-            found = find_nameprefix(last_name->lexeme, ctx->outer_nameprefixes);
+            found = find_nameprefix_in_list(last_name->lexeme, ctx->outer_nameprefixes);
         }
 
         if (parser_match_tk(ctx, '='))
@@ -12448,13 +12650,26 @@ static void parse_nameprefix(struct parser_ctx* ctx)
 
             // now we are sure this is a new nameprefix declaration
             new_nameprefix = calloc(1, sizeof * new_nameprefix);
+
+            if (validate_prefix(prefix_tok->lexeme) == NULL)
+            {
+                diagnostic(C_ERROR_UNEXPECTED,
+                           ctx,
+                           prefix_tok,
+                           NULL,
+                           "_Nameprefix prefix is not valid");
+                throw;
+            }
+
             new_nameprefix->prefix = unquote(strdup(prefix_tok->lexeme)); // TODO validate prefix
             new_nameprefix->name = strdup(last_name->lexeme);
 
-            if (found_parent)
-                push_nameprefix(&found_parent->nested_nps, new_nameprefix);
-            else
-                push_nameprefix(&ctx->outer_nameprefixes, new_nameprefix);
+            push_nameprefix(ctx, found_parent, new_nameprefix);
+
+            if (parser_match_tk(ctx, TK_STRING_LITERAL))
+                throw;
+            if (parser_match_tk(ctx, TK_SEMICOLON))
+                ; // dont throw, user forgot semicolon
         }
         else if (ctx->current->type == TK_IDENTIFIER)
         {
@@ -12467,18 +12682,8 @@ static void parse_nameprefix(struct parser_ctx* ctx)
                            "_Nameprefix declaration must be assigned to with a string literal");
                 throw;
             }
-            puts("nameprefix alias");
 
-            struct map_entry *found_alias = hashmap_find(&ctx->scopes.tail->np_aliases, ctx->current->lexeme);
-            if (found_alias)
-            {
-                diagnostic(C_ERROR_REDECLARATION,
-                           ctx,
-                           last_name,
-                           NULL,
-                           "_Nameprefix alias already declared in scope");
-                throw;
-            }
+            parse_nameprefix_alias_rhs(ctx, last_name);
         }
         else
         {
@@ -12492,9 +12697,10 @@ static void parse_nameprefix(struct parser_ctx* ctx)
     }
     catch
     {
-        if (new_nameprefix)
-            free(new_nameprefix);
+        nameprefix_clear(new_nameprefix);
+        nameprefix_alias_clear(alias);
     }
+
     token_list_clear(&parents_list);
 }
 
@@ -12724,6 +12930,11 @@ struct declaration_list parse(struct parser_ctx* ctx, struct token_list* list, s
     try
     {
         scope_list_push(&ctx->scopes, &file_scope);
+
+        struct nameprefix* global_np = calloc(1, sizeof * global_np);
+        global_np->name = strdup("_Global");
+        global_np->prefix = strdup("");
+        ctx->outer_nameprefixes = global_np;
 
         bool local_error = false;
         ctx->input_list = *list;

@@ -64,6 +64,7 @@ struct map_entry
         struct init_declarator* _Opt _Owner p_init_declarator;
         struct macro* _Opt _Owner p_macro;
         struct struct_entry* _Opt _Owner p_struct_entry;
+        struct nameprefix_alias* _Owner _Opt p_nameprefix_alias;
         char* _Opt _Owner p_text;
     } data;
     

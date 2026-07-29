@@ -236,6 +236,12 @@ int hashmap_set(struct hash_map* map, const char* key, struct hash_item_set* ite
         p = item->p_struct_entry;
         item->p_struct_entry = NULL;
     }
+    else if (item->p_nameprefix_alias)
+    {
+        type = TAG_TYPE_NAMEPREFIX_ALIAS;
+        p = item->p_nameprefix_alias;
+        item->p_nameprefix_alias = NULL;
+    }
     else if (item->text)
     {
         type = TAG_TYPE_TEXT;

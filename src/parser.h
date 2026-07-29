@@ -121,8 +121,8 @@ struct nameprefix_entry
 
 struct nameprefix
 {
-    const char *name;
-    const char *prefix;
+    char *name;
+    char *prefix;
 
     struct nameprefix_entry *tag_entries;
     struct nameprefix_entry *var_entries;
@@ -135,7 +135,7 @@ struct nameprefix
 
 struct nameprefix_alias
 {
-    const char *name;
+    char *name;
     struct nameprefix *np;
 };
 
@@ -1486,6 +1486,7 @@ struct block_item
     struct declaration* _Owner _Opt declaration;
     struct unlabeled_statement* _Owner _Opt unlabeled_statement;
     struct label* _Owner _Opt label;
+    struct nameprefix_alias* _Owner _Opt np_alias;
 
     struct block_item* _Owner _Opt next;
 };
