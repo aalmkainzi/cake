@@ -12,6 +12,7 @@ struct enumerator;
 struct enum_specifier;
 struct init_declarator;
 struct struct_or_union_specifier;
+struct nameprefix_alias;
 struct macro;
 struct struct_entry;
 
@@ -22,7 +23,7 @@ void enumerator_delete(struct enumerator* _Owner _Opt p);
 void enum_specifier_delete(struct enum_specifier* _Owner _Opt p);
 void struct_or_union_specifier_delete(struct struct_or_union_specifier* _Owner _Opt p);
 void struct_entry_delete(struct struct_entry* _Opt _Owner p);
-
+void nameprefix_entry_delete(struct nameprefix_alias* p);
 void macro_delete(struct macro* _Owner _Opt p);
 
 

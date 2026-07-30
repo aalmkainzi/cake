@@ -73,6 +73,10 @@ void map_entry_delete(struct map_entry* _Owner _Opt p)
         struct_entry_delete(p->data.p_struct_entry);
         break;
 
+    case TAG_TYPE_NAMEPREFIX_ALIAS:
+        nameprefix_entry_delete(p->data.p_nameprefix_alias);
+        break;
+
     case TAG_TYPE_TEXT:        
         free(p->data.p_text);
         break;
@@ -346,6 +350,10 @@ int hashmap_set(struct hash_map* map, const char* key, struct hash_item_set* ite
             case TAG_TYPE_STRUCT_ENTRY:
                 runtime_assert(pentry->data.p_struct_entry != NULL);
                 item->p_struct_entry = pentry->data.p_struct_entry;
+                break;
+            case TAG_TYPE_NAMEPREFIX_ALIAS:
+                runtime_assert(pentry->data.p_nameprefix_alias != NULL);
+                item->p_nameprefix_alias = pentry->data.p_nameprefix_alias;
                 break;
             case TAG_TYPE_TEXT:
                 runtime_assert(pentry->data.p_struct_entry != NULL);
