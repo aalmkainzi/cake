@@ -148,6 +148,16 @@ struct nameprefix_scope
     struct nameprefix_scope *down;
 };
 
+enum nameprefix_scope_search
+{
+    NP_ALLOW_ALL,
+    NP_ONLY_OUTER,
+    NP_ONLY_DIRECT_CHILDREN
+};
+
+static struct nameprefix* find_nested_nameprefix(const struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt);
+static struct nameprefix* find_nested_nameprefix_in_list(const struct parser_ctx* ctx, const struct token_node* names, const struct nameprefix* head, struct token** not_found_tok);
+
 struct parser_ctx
 {
     struct options options;
@@ -230,7 +240,7 @@ void parser_ctx_destroy(_Opt _Dtor struct parser_ctx* ctx);
 
 
 struct token* _Opt parser_look_ahead(const struct parser_ctx* ctx);
-struct token* _Opt parser_look_ahead_from(const struct parser_ctx* ctx, const struct token* tok);
+struct token* _Opt token_look_ahead(const struct parser_ctx* ctx, const struct token* tok);
 void unexpected_end_of_file(struct parser_ctx* ctx);
 void parser_match(struct parser_ctx* ctx);
 _Attr(nodiscard)

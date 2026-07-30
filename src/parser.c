@@ -81,15 +81,10 @@ void naming_convention_local_var(struct parser_ctx* ctx, struct token* token, st
 static void check_knr_brace_space_style(struct parser_ctx* ctx, struct token* token);
 static bool trying_to_use_vm_type_from_enclosing_function(const struct type* p_type, struct declarator* p_function);
 
-enum nameprefix_scope_search
-{
-    NP_ALLOW_ALL,
-    NP_ONLY_OUTER,
-    NP_ONLY_DIRECT_CHILDREN
-};
-
 static void parse_nameprefix_alias_rhs(struct parser_ctx* ctx, struct token* last_name);
 void token_node_push(struct token_node** head, struct token* new_node);
+void token_node_pop_back(struct token_node** head);
+struct token_node* token_node_back(struct token_node* head);
 
 static void check_open_brace_style(struct parser_ctx* ctx, struct token* token)
 {
@@ -1284,7 +1279,7 @@ struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, const char
 
 bool is_nameprefix_access(const struct parser_ctx* ctx, struct token* tok)
 {
-    return tok->type == TK_IDENTIFIER && parser_look_ahead_from(ctx, tok)->type == '::';
+    return tok->type == TK_IDENTIFIER && token_look_ahead(ctx, tok)->type == '::';
 }
 
 struct token_node* collect_full_nameprefix_access(const struct parser_ctx* ctx, struct token* tok)
@@ -1293,10 +1288,14 @@ struct token_node* collect_full_nameprefix_access(const struct parser_ctx* ctx, 
     while (tok->type == TK_IDENTIFIER)
     {
         token_node_push(&full_name, tok);
-        struct token* next = parser_look_ahead_from(ctx, tok);
+        struct token* next = token_look_ahead(ctx, tok);
         if (next->type == '::')
         {
-            tok = parser_look_ahead_from(ctx, next);
+            tok = token_look_ahead(ctx, next);
+        }
+        else
+        {
+            break;
         }
     }
     return full_name;
@@ -1322,8 +1321,19 @@ bool first_of_typedef_name(const struct parser_ctx* ctx, struct token* p_token)
     }
 
     struct token_node* var_access = collect_full_nameprefix_access(ctx, p_token);
+    struct token* last_name = token_node_back(var_access)->token;
+    token_node_pop_back(&var_access); // remove the last name, such that `var_access` is only nameprefixes
+
+    struct token* not_found_token;
+    struct nameprefix* found_np = find_nested_nameprefix(ctx, var_access, &not_found_token, NP_ALLOW_ALL);
+    if (var_access != NULL && !found_np)
+    {
+        diagnostic(C_ERROR_NOT_FOUND, ctx, not_found_token, NULL, "_Nameprefix not found");
+        return false;
+    }
 
     struct declarator* _Opt p_declarator = find_declarator(ctx, p_token->lexeme, NULL);
+    static_assert(0);
 
     if (p_declarator &&
         p_declarator->declaration_specifiers &&
@@ -2038,28 +2048,28 @@ static void token_promote(const struct parser_ctx* ctx, struct token* token)
     }
 }
 
-struct token* _Opt parser_look_ahead_from(const struct parser_ctx* ctx, const struct token* tok)
+struct token* _Opt token_look_ahead(const struct parser_ctx* ctx, const struct token* tok)
 {
     if (tok == NULL)
         return NULL;
-    
+
     struct token* _Opt p = tok->next;
     while (p && !(p->flags & TK_FLAG_FINAL))
     {
         p = p->next;
     }
-    
+
     if (p)
     {
         token_promote(ctx, p);
     }
-    
+
     return p;
 }
 
 struct token* _Opt parser_look_ahead(const struct parser_ctx* ctx)
 {
-    return parser_look_ahead_from(ctx, ctx->current);
+    return token_look_ahead(ctx, ctx->current);
 }
 
 static struct token* _Opt pragma_declaration_match(const struct token* p_current)
@@ -12341,26 +12351,31 @@ static void check_unused_static_declarators(struct parser_ctx* ctx, struct decla
     }
 }
 
-static struct nameprefix* find_nameprefix_in_list(const char* name, struct nameprefix* head)
+static struct nameprefix* find_nameprefix_in_list(const char* name, const struct nameprefix* head)
 {
-    struct nameprefix* it = head;
+    const struct nameprefix* it = head;
     while (it)
     {
         if (strcmp(it->name, name) == 0)
-            return it;
+            return (struct nameprefix*) it;
         it = it->next;
     }
     return NULL;
 }
 
-static struct nameprefix* find_nested_nameprefix_in_list(struct token_node* names, struct nameprefix* head, struct token** not_found_tok)
+static struct nameprefix* find_nested_nameprefix_in_list(const struct parser_ctx* ctx, const struct token_node* names, const struct nameprefix* head, struct token** not_found_tok)
 {
+    if (names == NULL)
+    {
+        return ctx->outer_nameprefixes; // _Global
+    }
+
     *not_found_tok = NULL;
-    struct token_node* it = names;
-    struct nameprefix* np_it = head;
+    const struct token_node* it = names; // TODO should I handle the NULL case to return _Global?
+    const struct nameprefix* np_it = head;
     while (it)
     {
-        struct nameprefix* found = find_nameprefix_in_list(it->token->lexeme, np_it);
+        const struct nameprefix* found = find_nameprefix_in_list(it->token->lexeme, np_it);
         if (!found)
         {
             *not_found_tok = it->token;
@@ -12369,10 +12384,10 @@ static struct nameprefix* find_nested_nameprefix_in_list(struct token_node* name
         it = it->next;
         np_it = found;
     }
-    return np_it;
+    return (struct nameprefix*) np_it;
 }
 
-static bool in_apply_prefix_scope(struct parser_ctx* ctx)
+static bool in_apply_prefix_scope(const struct parser_ctx* ctx)
 {
     return ctx->nameprefix_scope && !ctx->nameprefix_scope->is_capture;
 }
@@ -12385,7 +12400,7 @@ static bool in_apply_prefix_file_scope(struct parser_ctx* ctx)
 // if caller is sure sequence is entirely nameprefixes (doesnt end with var like A::B::i)
 // make sure the caller has all the names in `names` including C
 // `A::B::C`
-static struct nameprefix* find_nested_nameprefix(struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt)
+static struct nameprefix* find_nested_nameprefix(const struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt)
 {
     *not_found_tok = NULL;
 
@@ -12527,6 +12542,25 @@ void token_node_push(struct token_node** head, struct token* new_node)
 
     *cur = calloc(1, sizeof ** cur);
     (*cur)->token = new_node;
+}
+
+void token_node_pop_back(struct token_node** head)
+{
+    struct token_node** it = head;
+    while(*it && (*it)->next)
+    {
+        it = &(*it)->next;
+    }
+
+    free(*it);
+    *it = NULL;
+}
+
+struct token_node* token_node_back(struct token_node* head)
+{
+    while(head && head->next)
+        head = head->next;
+    return head;
 }
 
 // ignores quotes
