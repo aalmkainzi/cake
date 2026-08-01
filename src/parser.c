@@ -1324,12 +1324,14 @@ struct nameprefix_entry* get_nameprefix_entry(const struct nameprefix* np, const
     return it;
 }
 
-struct nameprefix_entry* get_nameprefix_entry_from_token(const struct parser_ctx* ctx, struct token* p_token, bool is_tag, bool *uses_nameprefixes)
+struct nameprefix_entry* get_nameprefix_entry_from_token(const struct parser_ctx* ctx, struct token* p_token, bool is_tag, bool *uses_nameprefixes, struct token** last_name_opt)
 {
     struct token_node* var_access = collect_full_nameprefix_access(ctx, p_token);
     struct token* last_name = token_node_back(var_access)->token;
     token_node_pop_back(&var_access); // remove the last name, such that `var_access` is only nameprefixes
 
+    if (last_name_opt)
+        *last_name_opt = last_name;
     *uses_nameprefixes = var_access != NULL;
 
     struct token* not_found_token;
@@ -1364,7 +1366,7 @@ bool first_of_typedef_name(const struct parser_ctx* ctx, struct token* p_token)
     }
 
     bool uses_nameprefixes = false;
-    struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, p_token, false, &uses_nameprefixes);
+    struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, p_token, false, &uses_nameprefixes, NULL);
 
     struct declarator* _Opt p_declarator = find_declarator(ctx, entry ? entry->entry->key : p_token->lexeme, uses_nameprefixes, NULL);
 
@@ -2521,7 +2523,7 @@ struct declaration_specifiers* _Owner _Opt declaration_specifiers(struct parser_
                     else if (p_declaration_specifier->type_specifier_qualifier->type_specifier->token->type == TK_IDENTIFIER)
                     {
                         bool uses_np;
-                        struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, p_declaration_specifier->type_specifier_qualifier->type_specifier->token, false, &uses_np);
+                        struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, p_declaration_specifier->type_specifier_qualifier->type_specifier->token, false, &uses_np, NULL);
 
                         char *name = entry ? entry->entry->key : p_declaration_specifier->type_specifier_qualifier->type_specifier->token->lexeme;
                         p_declaration_specifiers->typedef_declarator = find_declarator(ctx, name, false, NULL);
@@ -3026,7 +3028,7 @@ struct declaration* _Owner _Opt declaration(struct parser_ctx* ctx,
                 char* func_name = "";
                 if (func_name_tok)
                 {
-                    struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, func_name_tok, false, &uses_nameprefixes);
+                    struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, func_name_tok, false, &uses_nameprefixes, NULL);
                     if (entry)
                         func_name = entry->entry->key;
                 }
@@ -7035,6 +7037,12 @@ void function_declarator_delete(struct function_declarator* _Owner _Opt p)
     }
 }
 
+static void parser_set_current_token(struct parser_ctx* ctx, struct token* tok)
+{
+    ctx->current = tok;
+    ctx->previous = previous_parser_token(tok);
+}
+
 void direct_declarator_delete(struct direct_declarator* _Owner _Opt p)
 {
     if (p)
@@ -7098,13 +7106,18 @@ struct direct_declarator* _Owner _Opt direct_declarator(struct parser_ctx* ctx,
 
         if (ctx->current->type == TK_IDENTIFIER)
         {
+            static_assert(0);
+
+            bool uses_nameprefixes;
+            struct token* last_name;
+            struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, ctx->current, false, &uses_nameprefixes, &last_name);
             p_direct_declarator->name_opt = ctx->current;
             if (pp_token_name_opt != NULL)
             {
-                *pp_token_name_opt = ctx->current;
+                *pp_token_name_opt = ctx->current; // use last_name instead? or maybe entry->entry->key
             }
 
-            parser_match(ctx); // TODO needs to match IDENT:: sequence (?)
+            parser_set_current_token(ctx, token_look_ahead(ctx, last_name));
             p_direct_declarator->p_attribute_specifier_sequence = attribute_specifier_sequence_opt(ctx);
         }
         else if (ctx->current->type == '(')
