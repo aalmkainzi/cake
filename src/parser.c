@@ -3,8 +3,6 @@
  *  https://github.com/thradams/cake
 */
 
-#include "options.h"
-#include "token.h"
 #pragma safety enable
 
 #include "ownership.h"
@@ -1182,7 +1180,7 @@ struct map_entry* _Opt find_tag(struct parser_ctx* ctx, const char* lexeme, stru
     return NULL;
 }
 
-struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, const char* lexeme, struct scope* _Opt* _Opt ppscope_opt)
+struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, const char* lexeme, bool only_global, struct scope* _Opt* _Opt ppscope_opt)
 {
     if (ppscope_opt != NULL)
         *ppscope_opt = NULL; // out
@@ -1246,9 +1244,9 @@ struct struct_or_union_specifier* _Opt find_struct_or_union_specifier(const stru
     return p;
 }
 
-struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char* lexeme, struct scope* _Opt* _Opt ppscope_opt)
+struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char* lexeme, bool only_global, struct scope* _Opt* _Opt ppscope_opt)
 {
-    struct map_entry* _Opt p_entry = find_variables(ctx, lexeme, ppscope_opt);
+    struct map_entry* _Opt p_entry = find_variables(ctx, lexeme, only_global, ppscope_opt);
 
     if (p_entry)
     {
@@ -1267,9 +1265,9 @@ struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char
     return NULL;
 }
 
-struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, const char* lexeme, struct scope* _Opt* _Opt ppscope_opt)
+struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, const char* lexeme, bool only_global, struct scope* _Opt* _Opt ppscope_opt)
 {
-    struct map_entry* _Opt p_entry = find_variables(ctx, lexeme, ppscope_opt);
+    struct map_entry* _Opt p_entry = find_variables(ctx, lexeme, only_global, ppscope_opt);
 
     if (p_entry && p_entry->type == TAG_TYPE_ENUMERATOR)
         return p_entry->data.p_enumerator;
@@ -1301,6 +1299,51 @@ struct token_node* collect_full_nameprefix_access(const struct parser_ctx* ctx, 
     return full_name;
 }
 
+struct nameprefix_entry* get_nameprefix_entry(const struct nameprefix* np, const char *unprefixed_name, bool is_tag)
+{
+    char *prefix = np->prefix;
+    char *prefixed_name = malloc(strlen(unprefixed_name) + strlen(np->prefix) + 1);
+    sprintf(prefixed_name, "%s%s", prefix, unprefixed_name);
+
+    struct nameprefix_entry* it = NULL;
+    if (is_tag)
+    {
+        it = np->tag_entries;
+    }
+    else
+    {
+        it = np->var_entries;
+    }
+    while (it)
+    {
+        if (strcmp(it->entry->key, prefixed_name) == 0)
+            break;
+    }
+
+    free(prefixed_name);
+    return it;
+}
+
+struct nameprefix_entry* get_nameprefix_entry_from_token(const struct parser_ctx* ctx, struct token* p_token, bool is_tag, bool *uses_nameprefixes)
+{
+    struct token_node* var_access = collect_full_nameprefix_access(ctx, p_token);
+    struct token* last_name = token_node_back(var_access)->token;
+    token_node_pop_back(&var_access); // remove the last name, such that `var_access` is only nameprefixes
+
+    *uses_nameprefixes = var_access != NULL;
+
+    struct token* not_found_token;
+    struct nameprefix* found_np = find_nameprefix(ctx, var_access, &not_found_token, NP_ALLOW_ALL);
+    if (var_access != NULL && !found_np)
+    {
+        diagnostic(C_ERROR_NOT_FOUND, ctx, not_found_token, NULL, "_Nameprefix not found");
+        return false;
+    }
+
+    struct nameprefix_entry* np_entry = get_nameprefix_entry(found_np, last_name->lexeme, is_tag);
+    return np_entry;
+}
+
 bool first_of_typedef_name(const struct parser_ctx* ctx, struct token* p_token)
 {
 
@@ -1320,20 +1363,10 @@ bool first_of_typedef_name(const struct parser_ctx* ctx, struct token* p_token)
         return false;
     }
 
-    struct token_node* var_access = collect_full_nameprefix_access(ctx, p_token);
-    struct token* last_name = token_node_back(var_access)->token;
-    token_node_pop_back(&var_access); // remove the last name, such that `var_access` is only nameprefixes
+    bool uses_nameprefixes = false;
+    struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, p_token, false, &uses_nameprefixes);
 
-    struct token* not_found_token;
-    struct nameprefix* found_np = find_nested_nameprefix(ctx, var_access, &not_found_token, NP_ALLOW_ALL);
-    if (var_access != NULL && !found_np)
-    {
-        diagnostic(C_ERROR_NOT_FOUND, ctx, not_found_token, NULL, "_Nameprefix not found");
-        return false;
-    }
-
-    struct declarator* _Opt p_declarator = find_declarator(ctx, p_token->lexeme, NULL);
-    static_assert(0);
+    struct declarator* _Opt p_declarator = find_declarator(ctx, entry ? entry->entry->key : p_token->lexeme, uses_nameprefixes, NULL);
 
     if (p_declarator &&
         p_declarator->declaration_specifiers &&
@@ -2487,10 +2520,11 @@ struct declaration_specifiers* _Owner _Opt declaration_specifiers(struct parser_
                     }
                     else if (p_declaration_specifier->type_specifier_qualifier->type_specifier->token->type == TK_IDENTIFIER)
                     {
-                        p_declaration_specifiers->typedef_declarator =
-                            find_declarator(ctx,
-                                p_declaration_specifier->type_specifier_qualifier->type_specifier->token->lexeme,
-                                NULL);
+                        bool uses_np;
+                        struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, p_declaration_specifier->type_specifier_qualifier->type_specifier->token, false, &uses_np);
+
+                        char *name = entry ? entry->entry->key : p_declaration_specifier->type_specifier_qualifier->type_specifier->token->lexeme;
+                        p_declaration_specifiers->typedef_declarator = find_declarator(ctx, name, false, NULL);
 
                         // p_declaration_specifiers->typedef_declarator = p_declaration_specifier->type_specifier_qualifier->pType_specifier->token->lexeme;
                     }
@@ -2987,11 +3021,19 @@ struct declaration* _Owner _Opt declaration(struct parser_ctx* ctx,
                    Now we have the function body, let's see if we had a previous
                    function body.
                 */
-                const char* func_name = p_declaration->init_declarator_list.head->p_declarator->name_opt ?
-                    p_declaration->init_declarator_list.head->p_declarator->name_opt->lexeme : "";
+                struct token* func_name_tok = p_declaration->init_declarator_list.head->p_declarator->name_opt;
+                bool uses_nameprefixes = false;
+                char* func_name = "";
+                if (func_name_tok)
+                {
+                    struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, func_name_tok, false, &uses_nameprefixes);
+                    if (entry)
+                        func_name = entry->entry->key;
+                    static_assert(0);
+                }
 
                 struct scope* _Opt p_previous_scope = NULL;
-                struct declarator* _Opt p_previous_declarator = find_declarator(ctx, func_name, &p_previous_scope);
+                struct declarator* _Opt p_previous_declarator = find_declarator(ctx, func_name, uses_nameprefixes, &p_previous_scope);
                 if (p_previous_declarator && p_previous_declarator != p_declaration->init_declarator_list.head->p_declarator)
                 {
                     p_previous_declarator->p_complete_declarator = p_declaration->init_declarator_list.head->p_declarator;
@@ -3282,7 +3324,7 @@ struct init_declarator* _Owner _Opt init_declarator(struct parser_ctx* ctx,
         const char* declarator_name = p_init_declarator->p_declarator->name_opt ? p_init_declarator->p_declarator->name_opt->lexeme : "";
 
         struct scope* _Opt out_scope = NULL;
-        struct declarator* _Opt p_previous_declarator = find_declarator(ctx, declarator_name, &out_scope);
+        struct declarator* _Opt p_previous_declarator = find_declarator(ctx, declarator_name, false, &out_scope);
         if (p_previous_declarator)
         {
             p_init_declarator->p_declarator->p_complete_declarator = p_previous_declarator;
@@ -4827,7 +4869,7 @@ struct type_specifier* _Owner _Opt type_specifier(struct parser_ctx* ctx)
             p_type_specifier->flags = TYPE_SPECIFIER_TYPEDEF;
 
             p_type_specifier->typedef_declarator =
-                find_declarator(ctx, ctx->current->lexeme, NULL);
+                find_declarator(ctx, ctx->current->lexeme, false, NULL);
 
             /* if we got here, it must already exist (reuse?) */
             runtime_assert(p_type_specifier->typedef_declarator != NULL);
@@ -5931,6 +5973,7 @@ struct specifier_qualifier_list* _Owner _Opt specifier_qualifier_list(struct par
                     p_specifier_qualifier_list->typedef_declarator =
                         find_declarator(ctx,
                             p_type_specifier_qualifier->type_specifier->token->lexeme,
+                            false,
                             NULL);
                 }
             }
@@ -12298,7 +12341,7 @@ static void check_unused_static_declarators(struct parser_ctx* ctx, struct decla
             if (p->init_declarator_list.head &&
                 p->init_declarator_list.head->p_declarator)
             {
-                struct map_entry* _Opt p_entry = find_variables(ctx, p->init_declarator_list.head->p_declarator->name_opt->lexeme, NULL);
+                struct map_entry* _Opt p_entry = find_variables(ctx, p->init_declarator_list.head->p_declarator->name_opt->lexeme, false, NULL);
                 if (p_entry && (p_entry->type == TAG_TYPE_DECLARATOR || p_entry->type == TAG_TYPE_INIT_DECLARATOR))
                 {
                     /*
@@ -12365,13 +12408,8 @@ static struct nameprefix* find_nameprefix_in_list(const char* name, const struct
 
 static struct nameprefix* find_nested_nameprefix_in_list(const struct parser_ctx* ctx, const struct token_node* names, const struct nameprefix* head, struct token** not_found_tok)
 {
-    if (names == NULL)
-    {
-        return ctx->outer_nameprefixes; // _Global
-    }
-
     *not_found_tok = NULL;
-    const struct token_node* it = names; // TODO should I handle the NULL case to return _Global?
+    const struct token_node* it = names;
     const struct nameprefix* np_it = head;
     while (it)
     {
@@ -12400,37 +12438,9 @@ static bool in_apply_prefix_file_scope(struct parser_ctx* ctx)
 // if caller is sure sequence is entirely nameprefixes (doesnt end with var like A::B::i)
 // make sure the caller has all the names in `names` including C
 // `A::B::C`
-static struct nameprefix* find_nested_nameprefix(const struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt)
+static struct nameprefix* find_nameprefix(const struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt)
 {
     *not_found_tok = NULL;
-
-    if (in_apply_prefix_scope(ctx))
-    {
-        if (opt == NP_ALLOW_ALL) // we're inside an apply-prefix scope, can use available names, searching up-wards
-        {
-            struct nameprefix* cur = ctx->nameprefix_scope->np;
-            struct nameprefix* found = NULL;
-            bool found_first_name = false;
-            while (cur && !found_first_name)
-            {
-                found = find_nested_nameprefix_in_list(names, cur->nested_nps, not_found_tok);
-                found_first_name = *not_found_tok != names->token;
-                cur = cur->parent;
-            }
-            if (found_first_name)
-                return found;
-        }
-        else if (opt == NP_ONLY_DIRECT_CHILDREN) // we're opening an apply-prefix scope
-        {
-            if (ctx->nameprefix_scope && !ctx->nameprefix_scope->is_capture)
-            {
-                struct nameprefix* found = find_nested_nameprefix_in_list(names, ctx->nameprefix_scope->np->nested_nps, not_found_tok);
-                bool found_first_name = *not_found_tok != names->token;
-                if (found_first_name)
-                    return found;
-            }
-        }
-    }
 
     if (opt == NP_ALLOW_ALL) // aliases allowed, search them
     {
@@ -12444,18 +12454,46 @@ static struct nameprefix* find_nested_nameprefix(const struct parser_ctx* ctx, s
                 struct nameprefix_alias* alias = entry->data.p_nameprefix_alias;
                 struct nameprefix* np = alias->np;
                 struct token_node* names_skip_one = names->next;
-
-                struct nameprefix* found = find_nested_nameprefix_in_list(names_skip_one, np->nested_nps, not_found_tok);
+                
+                struct nameprefix* found = find_nested_nameprefix_in_list(ctx, names_skip_one, np->nested_nps, not_found_tok);
                 return found;
             }
             scope_it = scope_it->previous;
         }
     }
 
+    if (in_apply_prefix_scope(ctx))
+    {
+        if (opt == NP_ALLOW_ALL) // we're inside an apply-prefix scope, can use available names, searching up-wards
+        {
+            struct nameprefix* cur = ctx->nameprefix_scope->np;
+            struct nameprefix* found = NULL;
+            bool found_first_name = false;
+            while (cur && !found_first_name)
+            {
+                found = find_nested_nameprefix_in_list(ctx, names, cur->nested_nps, not_found_tok);
+                found_first_name = *not_found_tok != names->token;
+                cur = cur->parent;
+            }
+            if (found_first_name)
+                return found;
+        }
+        else if (opt == NP_ONLY_DIRECT_CHILDREN) // we're opening an apply-prefix scope
+        {
+            if (ctx->nameprefix_scope && !ctx->nameprefix_scope->is_capture)
+            {
+                struct nameprefix* found = find_nested_nameprefix_in_list(ctx, names, ctx->nameprefix_scope->np->nested_nps, not_found_tok);
+                bool found_first_name = *not_found_tok != names->token;
+                if (found_first_name)
+                    return found;
+            }
+        }
+    }
+
     // search outer nameprefixes
     if (opt != NP_ONLY_DIRECT_CHILDREN || ctx->nameprefix_scope == NULL)
     {
-        struct nameprefix* found = find_nested_nameprefix_in_list(names, ctx->outer_nameprefixes, not_found_tok);
+        struct nameprefix* found = find_nested_nameprefix_in_list(ctx, names, ctx->outer_nameprefixes, not_found_tok);
         return found;
     }
     
@@ -12552,8 +12590,12 @@ void token_node_pop_back(struct token_node** head)
         it = &(*it)->next;
     }
 
-    free(*it);
-    *it = NULL;
+    // if list empty, noop
+    if (*it)
+    {
+        free(*it);
+        *it = NULL;
+    }
 }
 
 struct token_node* token_node_back(struct token_node* head)
@@ -12654,7 +12696,7 @@ static void parse_nameprefix_alias_rhs(struct parser_ctx* ctx, struct token* ali
         token_node_push(&np_names_list, last_name);
 
         struct token* not_found_tok;
-        struct nameprefix* found_nameprefix = find_nested_nameprefix(ctx, np_names_list, &not_found_tok, NP_ALLOW_ALL);
+        struct nameprefix* found_nameprefix = find_nameprefix(ctx, np_names_list, &not_found_tok, NP_ALLOW_ALL);
 
         if (!found_nameprefix)
         {
@@ -12712,7 +12754,7 @@ static void parse_nameprefix(struct parser_ctx* ctx)
         if (parents_list)
         {
             struct token* not_found_tok;
-            found_parent = find_nested_nameprefix(ctx, parents_list, &not_found_tok, NP_ONLY_OUTER);
+            found_parent = find_nameprefix(ctx, parents_list, &not_found_tok, NP_ONLY_OUTER);
             if (!found_parent)
             {
                 diagnostic(C_ERROR_NOT_FOUND,
@@ -12860,7 +12902,7 @@ void parse_nameprefix_scope(struct parser_ctx* ctx, bool is_capture)
         token_node_push(&np_names_list, last_name);
 
         struct token* not_found_tok;
-        struct nameprefix* np = find_nested_nameprefix(ctx, np_names_list, &not_found_tok, is_capture ? NP_ONLY_OUTER : NP_ONLY_DIRECT_CHILDREN);
+        struct nameprefix* np = find_nameprefix(ctx, np_names_list, &not_found_tok, is_capture ? NP_ONLY_OUTER : NP_ONLY_DIRECT_CHILDREN);
         if (!np)
         {
             diagnostic(C_ERROR_NOT_FOUND,

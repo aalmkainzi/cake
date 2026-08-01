@@ -155,7 +155,7 @@ enum nameprefix_scope_search
     NP_ONLY_DIRECT_CHILDREN
 };
 
-static struct nameprefix* find_nested_nameprefix(const struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt);
+static struct nameprefix* find_nameprefix(const struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt);
 static struct nameprefix* find_nested_nameprefix_in_list(const struct parser_ctx* ctx, const struct token_node* names, const struct nameprefix* head, struct token** not_found_tok);
 
 struct parser_ctx
@@ -248,9 +248,9 @@ int parser_match_tk(struct parser_ctx* ctx, enum token_type type);
 int parser_match_tk_lint(struct parser_ctx* ctx, enum token_type type, struct token** pp_token_lint);
 
 struct token* _Opt previous_parser_token(const struct token* token);
-struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char* lexeme, struct scope* _Opt* _Opt ppscope_opt);
-struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, const char* lexeme, struct scope* _Opt* _Opt ppscope_opt);
-struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, const char* lexeme, struct scope* _Opt* _Opt ppscope_opt);
+struct declarator* _Opt find_declarator(const struct parser_ctx* ctx, const char* lexeme, bool only_global, struct scope* _Opt* _Opt ppscope_opt);
+struct enumerator* _Opt find_enumerator(const struct parser_ctx* ctx, const char* lexeme, bool only_global, struct scope* _Opt* _Opt ppscope_opt);
+struct map_entry* _Opt find_variables(const struct parser_ctx* ctx, const char* lexeme, bool only_global, struct scope* _Opt* _Opt ppscope_opt);
 
 struct struct_or_union_specifier* _Opt find_struct_or_union_specifier(const struct parser_ctx* ctx, const char* lexeme);
 
