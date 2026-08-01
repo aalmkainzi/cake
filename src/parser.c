@@ -3029,7 +3029,6 @@ struct declaration* _Owner _Opt declaration(struct parser_ctx* ctx,
                     struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, func_name_tok, false, &uses_nameprefixes);
                     if (entry)
                         func_name = entry->entry->key;
-                    static_assert(0);
                 }
 
                 struct scope* _Opt p_previous_scope = NULL;
@@ -7105,7 +7104,7 @@ struct direct_declarator* _Owner _Opt direct_declarator(struct parser_ctx* ctx,
                 *pp_token_name_opt = ctx->current;
             }
 
-            parser_match(ctx);
+            parser_match(ctx); // TODO needs to match IDENT:: sequence (?)
             p_direct_declarator->p_attribute_specifier_sequence = attribute_specifier_sequence_opt(ctx);
         }
         else if (ctx->current->type == '(')
@@ -12394,7 +12393,7 @@ static void check_unused_static_declarators(struct parser_ctx* ctx, struct decla
     }
 }
 
-static struct nameprefix* find_nameprefix_in_list(const char* name, const struct nameprefix* head)
+struct nameprefix* find_nameprefix_in_list(const char* name, const struct nameprefix* head)
 {
     const struct nameprefix* it = head;
     while (it)
