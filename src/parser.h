@@ -139,10 +139,16 @@ struct nameprefix_alias
     struct nameprefix *np;
 };
 
+struct nameprefix_scope_np
+{
+    struct nameprefix* np;
+    struct nameprefix_scope_np* next;
+};
+
 struct nameprefix_scope
 {
     bool is_capture;
-    struct nameprefix *np;
+    struct nameprefix_scope_np *np_head;
 
     struct nameprefix_scope *up;
     struct nameprefix_scope *down;

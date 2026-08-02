@@ -89,6 +89,8 @@ void token_node_clear(struct token_node* head);
 
 void parser_set_current_token(struct parser_ctx* ctx, struct token* token);
 
+char *get_nameprefixed_name(struct parser_ctx* ctx, struct token* token, struct nameprefix** np, struct token** last_name);
+
 static void check_open_brace_style(struct parser_ctx* ctx, struct token* token)
 {
     /* token points to { */
@@ -5138,14 +5140,26 @@ struct struct_or_union_specifier* _Owner _Opt struct_or_union_specifier(struct p
 
         if (ctx->current->type == TK_IDENTIFIER)
         {
-            p_struct_or_union_specifier->tagtoken = ctx->current;
-            snprintf(p_struct_or_union_specifier->tag_name,
-                sizeof p_struct_or_union_specifier->tag_name,
-                "%s",
-                p_struct_or_union_specifier->tagtoken->lexeme);
+            struct nameprefix* np;
+            struct token* last_name;
+            char *prefixed_name = get_nameprefixed_name(ctx, ctx->current, &np, &last_name);
+
+            if (np)
+            {
+                p_struct_or_union_specifier->tagtoken = clone_token(last_name);
+                static_assert(0);
+            }
+            else
+            {
+                p_struct_or_union_specifier->tagtoken = ctx->current;
+                snprintf(p_struct_or_union_specifier->tag_name,
+                    sizeof p_struct_or_union_specifier->tag_name,
+                    "%s",
+                    p_struct_or_union_specifier->tagtoken->lexeme);
+                parser_match(ctx);
+            }
 
             static_assert(0); // TODO call get_nameprefixed_name
-            parser_match(ctx);
 
             if (ctx->current == NULL)
             {
@@ -12628,7 +12642,7 @@ static struct nameprefix* find_nameprefix(const struct parser_ctx* ctx, struct t
         {
             if (ctx->nameprefix_scope && !ctx->nameprefix_scope->is_capture)
             {
-                struct nameprefix* found = find_nested_nameprefix_in_list(ctx, names, ctx->nameprefix_scope->np->nested_nps, not_found_tok);
+                struct nameprefix* found = find_nested_nameprefix_in_list(ctx, names, ctx->nameprefix_scope->np_head->np, not_found_tok);
                 bool found_first_name = *not_found_tok != names->token;
                 if (found_first_name)
                     return found;
@@ -12722,23 +12736,29 @@ static struct token_node* extract_ident_coloncolon_list(struct parser_ctx* ctx, 
 // ctx->current becomes after C
 static struct token_node* consume_ident_coloncolon_list(struct parser_ctx* ctx, struct token** last_name)
 {
-
+    struct token_node* head = extract_ident_coloncolon_list(ctx, ctx->current, last_name);
+    parser_set_current_token(ctx, token_look_ahead(ctx, *last_name));
+    return head;
 }
 
-char *get_nameprefixed_name(struct parser_ctx* ctx, struct token* token)
+char *get_nameprefixed_name(struct parser_ctx* ctx, struct token* token, struct nameprefix** np, struct token** last_name)
 {
-    struct token* last_name;
-    struct token_node* names = extract_ident_coloncolon_list(ctx, token, &last_name);
+    struct token_node* names = extract_ident_coloncolon_list(ctx, token, last_name);
     if (ctx->nameprefix_scope && !ctx->nameprefix_scope->is_capture)
     {
         struct token* not_found;
-        struct nameprefix* np = find_nameprefix(ctx, names, &not_found, NP_ALLOW_ALL);
-        if (np == NULL)
+        *np = find_nameprefix(ctx, names, &not_found, NP_ALLOW_ALL);
+        if (*np == NULL)
         {
             diagnostic(C_ERROR_NOT_FOUND, ctx, not_found, NULL, "_Nameprefix not found");
             return NULL;
         }
     }
+    // TODO rules are not as simple as earlier thought.
+    // for an entry to enter a nameprefix, it *must* be declared inside it unqualified
+    // no other way to enter
+    // plan:
+    // check if inside np scope, if so check if unqualified name, if so, add it to np (following capture vs apply rules).
 }
 
 void token_node_push(struct token_node** head, struct token* new_node)
