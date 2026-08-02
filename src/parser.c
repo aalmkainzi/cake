@@ -1346,6 +1346,20 @@ struct nameprefix_entry* get_nameprefix_entry_from_token(const struct parser_ctx
     return np_entry;
 }
 
+static struct declarator* get_declarator_from_entry(struct map_entry* entry)
+{
+    if (entry->type == TAG_TYPE_DECLARATOR)
+    {
+        return entry->data.p_declarator;
+    }
+    else if (entry->type == TAG_TYPE_INIT_DECLARATOR)
+    {
+        return entry->data.p_init_declarator->p_declarator;
+    }
+
+    return NULL;
+}
+
 bool first_of_typedef_name(const struct parser_ctx* ctx, struct token* p_token)
 {
 
@@ -1368,7 +1382,16 @@ bool first_of_typedef_name(const struct parser_ctx* ctx, struct token* p_token)
     bool uses_nameprefixes = false;
     struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, p_token, false, &uses_nameprefixes, NULL);
 
-    struct declarator* _Opt p_declarator = find_declarator(ctx, entry ? entry->entry->key : p_token->lexeme, uses_nameprefixes, NULL);
+    struct declarator* _Opt p_declarator;
+
+    if (entry)
+    {
+        p_declarator = get_declarator_from_entry(entry->entry);
+    }
+    else
+    {
+        p_declarator = find_declarator(ctx, p_token->lexeme, false, NULL);
+    }
 
     if (p_declarator &&
         p_declarator->declaration_specifiers &&
@@ -2525,8 +2548,18 @@ struct declaration_specifiers* _Owner _Opt declaration_specifiers(struct parser_
                         bool uses_np;
                         struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, p_declaration_specifier->type_specifier_qualifier->type_specifier->token, false, &uses_np, NULL);
 
-                        char *name = entry ? entry->entry->key : p_declaration_specifier->type_specifier_qualifier->type_specifier->token->lexeme;
-                        p_declaration_specifiers->typedef_declarator = find_declarator(ctx, name, false, NULL);
+                        char *name;
+
+                        if (entry)
+                        {
+                            name = entry->entry->key;
+                            p_declaration_specifiers->typedef_declarator = get_declarator_from_entry(entry->entry);
+                        }
+                        else
+                        {
+                            name = p_declaration_specifier->type_specifier_qualifier->type_specifier->token->lexeme;;
+                            p_declaration_specifiers->typedef_declarator = find_declarator(ctx, name, false, NULL);
+                        }
 
                         // p_declaration_specifiers->typedef_declarator = p_declaration_specifier->type_specifier_qualifier->pType_specifier->token->lexeme;
                     }
@@ -3026,15 +3059,24 @@ struct declaration* _Owner _Opt declaration(struct parser_ctx* ctx,
                 struct token* func_name_tok = p_declaration->init_declarator_list.head->p_declarator->name_opt;
                 bool uses_nameprefixes = false;
                 char* func_name = "";
+                struct declarator* _Opt p_previous_declarator;
+                struct scope* _Opt p_previous_scope = NULL;
                 if (func_name_tok)
                 {
                     struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, func_name_tok, false, &uses_nameprefixes, NULL);
                     if (entry)
+                    {
                         func_name = entry->entry->key;
+                        p_previous_declarator = get_declarator_from_entry(entry->entry);
+                        p_previous_scope = ctx->scopes.head; // file scope
+                    }
+                    else
+                    {
+                        func_name = func_name_tok->lexeme;
+                        p_previous_declarator = find_declarator(ctx, func_name, uses_nameprefixes, &p_previous_scope);
+                    }
                 }
 
-                struct scope* _Opt p_previous_scope = NULL;
-                struct declarator* _Opt p_previous_declarator = find_declarator(ctx, func_name, uses_nameprefixes, &p_previous_scope);
                 if (p_previous_declarator && p_previous_declarator != p_declaration->init_declarator_list.head->p_declarator)
                 {
                     p_previous_declarator->p_complete_declarator = p_declaration->init_declarator_list.head->p_declarator;
@@ -3322,10 +3364,35 @@ struct init_declarator* _Owner _Opt init_declarator(struct parser_ctx* ctx,
         }
 
         /////////////////////////////////////////////////////////////////////////////
-        const char* declarator_name = p_init_declarator->p_declarator->name_opt ? p_init_declarator->p_declarator->name_opt->lexeme : "";
+        struct token* name_tok = p_init_declarator->p_declarator->name_opt;
 
+        const char* declarator_name;
+        struct declarator* _Opt p_previous_declarator;
         struct scope* _Opt out_scope = NULL;
-        struct declarator* _Opt p_previous_declarator = find_declarator(ctx, declarator_name, false, &out_scope);
+
+        static_asssert(0);
+        if (name_tok)
+        {
+            bool uses_np;
+            struct token* last_name;
+            struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, name_tok, false, &uses_np, &last_name);
+            if (entry)
+            {
+                declarator_name = entry->entry->key;
+                p_previous_declarator = get_declarator_from_entry(entry->entry);
+            }
+            else
+            {
+                declarator_name = name_tok->lexeme;
+            }
+        }
+        else
+        {
+            declarator_name = "";
+            p_previous_declarator = find_declarator(ctx, declarator_name, false, &out_scope);
+        }
+
+        struct declarator* _Opt 
         if (p_previous_declarator)
         {
             p_init_declarator->p_declarator->p_complete_declarator = p_previous_declarator;
@@ -7111,6 +7178,16 @@ struct direct_declarator* _Owner _Opt direct_declarator(struct parser_ctx* ctx,
             bool uses_nameprefixes;
             struct token* last_name;
             struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, ctx->current, false, &uses_nameprefixes, &last_name);
+
+            if (uses_nameprefixes && ctx->scopes.tail->previous != NULL)
+            {
+                diagnostic(C_ERROR_REDECLARATION,
+                           ctx,
+                           ctx->current,
+                           NULL,
+                           "direct-declarator must be unqualified at block scope");
+            }
+
             p_direct_declarator->name_opt = ctx->current;
             if (pp_token_name_opt != NULL)
             {
