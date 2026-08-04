@@ -90,6 +90,9 @@ void token_node_clear(struct token_node* head);
 void parser_set_current_token(struct parser_ctx* ctx, struct token* token);
 
 char *get_nameprefixed_name(struct parser_ctx* ctx, struct token* token, bool* uses_np, struct nameprefix** np, struct token** last_name);
+static bool in_apply_prefix_scope(const struct parser_ctx* ctx);
+static struct token_node* consume_ident_coloncolon_list(struct parser_ctx* ctx, struct token** last_name);
+static struct token_node* extract_ident_coloncolon_list(const struct parser_ctx* ctx, struct token* token, struct token** last_name);
 
 static void check_open_brace_style(struct parser_ctx* ctx, struct token* token)
 {
@@ -5140,15 +5143,51 @@ struct struct_or_union_specifier* _Owner _Opt struct_or_union_specifier(struct p
 
         if (ctx->current->type == TK_IDENTIFIER)
         {
-            struct nameprefix* np;
-            struct token* last_name;
-            bool uses_np;
-            char *prefixed_name = get_nameprefixed_name(ctx, ctx->current, &uses_np, &np, &last_name);
+            bool file_scope = ctx->scopes.tail->previous == NULL;
+            bool apply_prefix_scope = in_apply_prefix_scope(ctx);
+
+            struct nameprefix* np = NULL;
+            struct nameprefix_entry* entry = NULL;
+            struct token* last_name = NULL;
+            struct token_node* names = consume_ident_coloncolon_list(ctx, &last_name);
+            bool qualified_name = names != NULL;
+
+            if (names != NULL)
+            {
+                struct token* not_found_tok;
+                np = find_nameprefix(ctx, names, &not_found_tok, NP_ALLOW_ALL);
+                if (np == NULL)
+                {
+                    diagnostic(C_ERROR_NOT_FOUND,
+                            ctx,
+                            not_found_tok,
+                            NULL,
+                            "_Nameprefix not found");
+                    throw;
+                }
+
+                entry = get_nameprefix_entry(np, last_name->lexeme, true);
+                if (entry == NULL)
+                {
+                    diagnostic(C_ERROR_NOT_FOUND,
+                            ctx,
+                            not_found_tok,
+                            NULL,
+                            "tag not in %s", np->name);
+                    throw;
+                }
+            }
+            // two possible cases here:
+            // names and np are NULL
+            // or
+            // entry exists
 
             if (np)
             {
+                assert(entry != NULL);
+                char *prefixed_name = entry->entry->key;
                 p_struct_or_union_specifier->tagtoken = clone_token(last_name);
-                static_assert(0);
+                p_struct_or_union_specifier->tagtoken->lexeme = prefixed_name;
             }
             else
             {
@@ -5168,6 +5207,17 @@ struct struct_or_union_specifier* _Owner _Opt struct_or_union_specifier(struct p
 
             const bool is_struct_definition = (ctx->current->type == '{');
 
+            if (is_struct_definition && entry != NULL && qualified_name)
+            {
+                diagnostic(C_ERROR_NOT_FOUND,
+                        ctx,
+                        last_name,
+                        NULL,
+                        "cannot re-define name qualified struct tag", np->name);
+                throw;
+                // TODO erroring out for now, this should be allowed in C23 if struct def is identical
+                // or maybe always error out in this case?
+            }
             /*
              Structure, union, and enumeration tags have scope that begins just after the
              appearance of the tag in a type specifier that declares the tag.
@@ -12698,7 +12748,7 @@ static char *unquote(char *s)
     return s;
 }
 
-static struct token_node* extract_ident_coloncolon_list(struct parser_ctx* ctx, struct token* token, struct token** last_name)
+static struct token_node* extract_ident_coloncolon_list(const struct parser_ctx* ctx, struct token* token, struct token** last_name)
 {
     *last_name = NULL;
     struct token_node* parents_list = NULL;
@@ -12750,13 +12800,14 @@ char *get_nameprefixed_name(struct parser_ctx* ctx, struct token* token, bool* u
     *np = find_nameprefix(ctx, names, &not_found, NP_ALLOW_ALL);
     if (*np == NULL)
     {
-        diagnostic(C_ERROR_NOT_FOUND, ctx, not_found, NULL, "_Nameprefix not found");
-        return NULL;
+        return strdup((*last_name)->lexeme);
     }
-    
-    size_t needed_len = 0;
-    
-    size_t needed_len = strlen((*np)->prefix);
+
+    size_t needed_len = strlen((*np)->prefix) + strlen((*last_name)->lexeme);
+    char* prefixed_name = malloc(needed_len + 1);
+    sprintf(prefixed_name, "%s%s", (*np)->prefix, (*last_name)->lexeme);
+    return prefixed_name; // maybe delete this function and use get_entry
+
     // TODO rules are not as simple as earlier thought.
     // for an entry to enter a nameprefix, it *must* be declared inside it unqualified
     // no other way to enter
