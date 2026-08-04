@@ -354,6 +354,56 @@ bool is_first_of_primary_expression(const struct parser_ctx* ctx)
         ctx->current->type == TK_KEYWORD__GENERIC;
 }
 
+// also matches the close
+// returns if found close
+static int parser_match_until_close(struct parser_ctx* ctx, enum token_type close_token)
+{
+    while (ctx->current)
+    {
+        struct token* token = ctx->current;
+        enum token_type closer = TK_NONE;
+
+        switch (token->type)
+        {
+            case '(':
+                closer = ')';
+                break;
+            case '[':
+                closer = ']';
+                break;
+            case '{':
+                closer = '}';
+                break;
+
+            case ')':
+            case ']':
+            case '}':
+                if (close_token != ctx->current->type)
+                {
+                    diagnostic(C_ERROR_ATTR_UNBALANCED, ctx, ctx->current, NULL, "unbalanced token");
+                    parser_match(ctx); // skip bad token
+                    return 1;
+                }
+                else
+                {
+                    parser_match(ctx);
+                    return 0;
+                }
+                break;
+            
+            default:;
+        }
+
+        parser_match(ctx);
+        if (closer)
+        {
+            parser_match_until_close(ctx, closer);
+        }
+    }
+
+    return 1;
+}
+
 struct generic_association* _Owner _Opt generic_association(struct parser_ctx* ctx, struct type* p_selection_type, bool is_discarded, bool* p_selected)
 {
     *p_selected = false;
@@ -417,10 +467,34 @@ struct generic_association* _Owner _Opt generic_association(struct parser_ctx* c
         if (parser_match_tk(ctx, ':') != 0)
             throw;
 
-        struct expression* _Owner _Opt p_expression_temp = checked_expression(ctx, is_discarded);
-        if (p_expression_temp == NULL)
+        struct expression* _Owner _Opt p_expression_temp = NULL;
+        if (ctx->current->type == '[')
         {
-            throw;
+            if (*p_selected)
+            {
+                parser_match(ctx); // skip '['
+                p_expression_temp = expression(ctx, is_discarded);
+                parser_match(ctx); // skip ']'
+                if (p_expression_temp == NULL)
+                {
+                    throw;
+                }
+            }
+            else
+            {
+                parser_match(ctx);
+                p_generic_association->expression_start = ctx->current;
+
+                if (parser_match_until_close(ctx, ']') == 1)
+                {
+                    throw;
+                }
+            }
+        }
+        else
+        {
+            p_generic_association->expression_start = ctx->current;
+            p_expression_temp = checked_expression(ctx, is_discarded);
         }
 
         p_generic_association->expression = p_expression_temp;
@@ -575,6 +649,23 @@ struct generic_assoc_list generic_association_list(struct parser_ctx* ctx, struc
         if (p_generic_selection->p_view_selected_expression == NULL &&
             p_default_generic_association != NULL)
         {
+            if (p_default_generic_association->expression == NULL) // default: [ expr ]
+            {
+                // temporairly set current token to expression start [ expr ]
+                //                                                     ^
+                // must save current state to restore after parsing expr
+                struct token* current = ctx->current;
+                struct token* previous = ctx->previous;
+                ctx->current = p_default_generic_association->expression_start;
+                ctx->previous = previous_parser_token(ctx->current);
+
+                p_default_generic_association->expression = expression(ctx, false);
+
+                // restore
+                ctx->current = current;
+                ctx->previous = previous;
+            }
+
             p_generic_selection->p_view_selected_expression = p_default_generic_association->expression;
         }
     }

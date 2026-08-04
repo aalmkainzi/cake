@@ -154,6 +154,7 @@ struct generic_association
 
     struct token* first_token;
     struct token* last_token;
+    struct token* expression_start;
 
     struct generic_association* _Owner _Opt next;
 };
