@@ -12757,7 +12757,7 @@ struct nameprefix* find_nameprefix(const struct parser_ctx* ctx, struct token_no
         {
             if (ctx->nameprefix_scope && !ctx->nameprefix_scope->is_capture)
             {
-                struct nameprefix* found = find_nested_nameprefix_in_list(ctx, names, ctx->nameprefix_scope->np_head->np, not_found_tok);
+                struct nameprefix* found = find_nested_nameprefix_in_list(ctx, names, ctx->nameprefix_scope->np_head->np->nested_nps, not_found_tok);
                 bool found_first_name = *not_found_tok != names->token;
                 if (found_first_name)
                     return found;
