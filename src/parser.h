@@ -161,8 +161,8 @@ enum nameprefix_scope_search
     NP_ONLY_DIRECT_CHILDREN
 };
 
-static struct nameprefix* find_nameprefix(const struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt);
-static struct nameprefix* find_nested_nameprefix_in_list(const struct parser_ctx* ctx, const struct token_node* names, const struct nameprefix* head, struct token** not_found_tok);
+struct nameprefix* find_nameprefix(const struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt);
+struct nameprefix* find_nested_nameprefix_in_list(const struct parser_ctx* ctx, const struct token_node* names, const struct nameprefix* head, struct token** not_found_tok);
 
 struct parser_ctx
 {

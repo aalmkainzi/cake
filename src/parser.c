@@ -89,8 +89,10 @@ void token_node_clear(struct token_node* head);
 
 void parser_set_current_token(struct parser_ctx* ctx, struct token* token);
 
-char *get_nameprefixed_name(struct parser_ctx* ctx, struct token* token, bool* uses_np, struct nameprefix** np, struct token** last_name);
+char *get_nameprefixed_name(struct parser_ctx* ctx, struct nameprefix* np, const char *unprefixed_name);
+static struct nameprefix_entry* nameprefix_push_entry(struct parser_ctx* ctx, struct nameprefix* np, struct map_entry* map_entry, bool is_tag);
 static bool in_apply_prefix_scope(const struct parser_ctx* ctx);
+static bool in_apply_prefix_file_scope(const struct parser_ctx* ctx);
 static struct token_node* consume_ident_coloncolon_list(struct parser_ctx* ctx, struct token** last_name);
 static struct token_node* extract_ident_coloncolon_list(const struct parser_ctx* ctx, struct token* token, struct token** last_name);
 
@@ -1317,17 +1319,14 @@ struct nameprefix_entry* get_nameprefix_entry(const struct nameprefix* np, const
 
     struct nameprefix_entry* it = NULL;
     if (is_tag)
-    {
         it = np->tag_entries;
-    }
     else
-    {
         it = np->var_entries;
-    }
     while (it)
     {
         if (strcmp(it->entry->key, prefixed_name) == 0)
             break;
+        it = it->next;
     }
 
     free(prefixed_name);
@@ -1346,7 +1345,14 @@ struct nameprefix_entry* get_nameprefix_entry_from_token(const struct parser_ctx
 
         if (last_name_opt)
             *last_name_opt = last_name;
-        *uses_nameprefixes = var_access != NULL;
+
+        if (var_access == NULL)
+        {
+            *uses_nameprefixes = false;
+            return NULL;
+        }
+
+        *uses_nameprefixes = true;
 
         struct token* not_found_token;
         struct nameprefix* found_np = find_nameprefix(ctx, var_access, &not_found_token, NP_ALLOW_ALL);
@@ -3401,9 +3407,10 @@ struct init_declarator* _Owner _Opt init_declarator(struct parser_ctx* ctx,
                 declarator_name = entry->entry->key;
                 p_previous_declarator = get_declarator_from_entry(entry->entry);
             }
-            else
+            else // if (!uses_np)
             {
                 declarator_name = name_tok->lexeme;
+                p_previous_declarator = find_declarator(ctx, declarator_name, &out_scope);
             }
         }
         else
@@ -5152,31 +5159,29 @@ struct struct_or_union_specifier* _Owner _Opt struct_or_union_specifier(struct p
             struct token_node* names = consume_ident_coloncolon_list(ctx, &last_name);
             bool qualified_name = names != NULL;
 
-            if (names != NULL)
+            struct token* not_found_tok;
+            np = find_nameprefix(ctx, names, &not_found_tok, NP_ALLOW_ALL);
+            if (np == NULL)
             {
-                struct token* not_found_tok;
-                np = find_nameprefix(ctx, names, &not_found_tok, NP_ALLOW_ALL);
-                if (np == NULL)
-                {
-                    diagnostic(C_ERROR_NOT_FOUND,
-                            ctx,
-                            not_found_tok,
-                            NULL,
-                            "_Nameprefix not found");
-                    throw;
-                }
-
-                entry = get_nameprefix_entry(np, last_name->lexeme, true);
-                if (entry == NULL)
-                {
-                    diagnostic(C_ERROR_NOT_FOUND,
-                            ctx,
-                            not_found_tok,
-                            NULL,
-                            "tag not in %s", np->name);
-                    throw;
-                }
+                diagnostic(C_ERROR_NOT_FOUND,
+                        ctx,
+                        not_found_tok,
+                        NULL,
+                        "_Nameprefix not found");
+                throw;
             }
+
+            entry = get_nameprefix_entry(np, last_name->lexeme, true);
+            if (entry == NULL && names != NULL)
+            {
+                diagnostic(C_ERROR_NOT_FOUND,
+                        ctx,
+                        last_name,
+                        NULL,
+                        "tag not in %s", np->name);
+                throw;
+            }
+
             // two possible cases here:
             // names and np are NULL
             // or
@@ -5184,20 +5189,21 @@ struct struct_or_union_specifier* _Owner _Opt struct_or_union_specifier(struct p
 
             if (np)
             {
-                assert(entry != NULL);
-                char *prefixed_name = entry->entry->key;
+                char *prefixed_name = get_nameprefixed_name(ctx, np, last_name->lexeme);
                 p_struct_or_union_specifier->tagtoken = clone_token(last_name);
+                free(p_struct_or_union_specifier->tagtoken->lexeme);
                 p_struct_or_union_specifier->tagtoken->lexeme = prefixed_name;
             }
             else
             {
-                p_struct_or_union_specifier->tagtoken = ctx->current;
-                snprintf(p_struct_or_union_specifier->tag_name,
-                    sizeof p_struct_or_union_specifier->tag_name,
-                    "%s",
-                    p_struct_or_union_specifier->tagtoken->lexeme);
+                p_struct_or_union_specifier->tagtoken = last_name;
                 parser_match(ctx);
             }
+
+            snprintf(p_struct_or_union_specifier->tag_name,
+                sizeof p_struct_or_union_specifier->tag_name,
+                "%s",
+                p_struct_or_union_specifier->tagtoken->lexeme);
 
             if (ctx->current == NULL)
             {
@@ -5207,17 +5213,18 @@ struct struct_or_union_specifier* _Owner _Opt struct_or_union_specifier(struct p
 
             const bool is_struct_definition = (ctx->current->type == '{');
 
-            if (is_struct_definition && entry != NULL && qualified_name)
-            {
-                diagnostic(C_ERROR_NOT_FOUND,
-                        ctx,
-                        last_name,
-                        NULL,
-                        "cannot re-define name qualified struct tag", np->name);
-                throw;
-                // TODO erroring out for now, this should be allowed in C23 if struct def is identical
-                // or maybe always error out in this case?
-            }
+            // if (is_struct_definition && entry != NULL && qualified_name)
+            // {
+            //     diagnostic(C_ERROR_NOT_FOUND,
+            //             ctx,
+            //             last_name,
+            //             NULL,
+            //             "cannot re-define name qualified struct tag", np->name);
+            //     throw;
+            //     // TODO erroring out for now, this should be allowed in C23 if struct def is identical
+            //     // or maybe always error out in this case?
+            // }
+
             /*
              Structure, union, and enumeration tags have scope that begins just after the
              appearance of the tag in a type specifier that declares the tag.
@@ -5261,6 +5268,16 @@ struct struct_or_union_specifier* _Owner _Opt struct_or_union_specifier(struct p
             {
                 if (is_struct_definition)
                 {
+                    if (qualified_name && ctx->scopes.tail->previous != NULL)
+                    {
+                        diagnostic(C_ERROR_REDECLARATION,
+                                ctx,
+                                last_name,
+                                NULL,
+                                "qualified name declaration not allowed at block scope");
+                        throw;
+                    }
+
                     struct hash_item_set item = { 0 };
                     item.p_struct_or_union_specifier = struct_or_union_specifier_add_ref(p_struct_or_union_specifier);
                     hashmap_set(&ctx->scopes.tail->tags,
@@ -5268,6 +5285,12 @@ struct struct_or_union_specifier* _Owner _Opt struct_or_union_specifier(struct p
                         &item);
                     hash_item_set_destroy(&item);
                     p_struct_or_union_specifier->complete_struct_or_union_specifier_indirection = p_struct_or_union_specifier;
+
+                    if (np && ctx->scopes.tail->previous == NULL)
+                    {
+                        struct map_entry* map_entry = hashmap_find(&ctx->scopes.tail->tags, p_struct_or_union_specifier->tagtoken->lexeme);
+                        nameprefix_push_entry(ctx, np, map_entry, true);
+                    }
                 }
                 else
                 {
@@ -5277,19 +5300,7 @@ struct struct_or_union_specifier* _Owner _Opt struct_or_union_specifier(struct p
                     */
 
                     struct struct_or_union_specifier* _Opt p_first_tag_previous_scopes;
-
-                    bool uses_np;
-                    struct token* last_name;
-                    struct nameprefix_entry* entry = get_nameprefix_entry_from_token(ctx, p_struct_or_union_specifier->tagtoken, true, &uses_np, &last_name);
-
-                    if (entry)
-                    {
-                        p_first_tag_previous_scopes = entry->entry->data.p_struct_or_union_specifier;
-                    }
-                    else
-                    {
-                        p_first_tag_previous_scopes = find_struct_or_union_specifier(ctx, p_struct_or_union_specifier->tagtoken->lexeme);
-                    }
+                    p_first_tag_previous_scopes = find_struct_or_union_specifier(ctx, p_struct_or_union_specifier->tagtoken->lexeme);
 
                     if (p_first_tag_previous_scopes == NULL)
                     {
@@ -5303,6 +5314,12 @@ struct struct_or_union_specifier* _Owner _Opt struct_or_union_specifier(struct p
                             p_struct_or_union_specifier->tagtoken->lexeme,
                             &item);
                         hash_item_set_destroy(&item);
+
+                        if (np && ctx->scopes.tail->previous == NULL)
+                        {
+                            struct map_entry* map_entry = hashmap_find(&ctx->scopes.tail->tags, p_struct_or_union_specifier->tagtoken->lexeme);
+                            nameprefix_push_entry(ctx, np, map_entry, true);
+                        }
                     }
                     else
                     {
@@ -6355,13 +6372,37 @@ struct enum_specifier* _Owner _Opt enum_specifier(struct parser_ctx* ctx)
             throw;
         }
 
+        struct nameprefix* np = NULL;
         struct enum_specifier* prev_decl = NULL; // previous enum definition in the same scope. must be identical
         if (ctx->current->type == TK_IDENTIFIER)
         {
-            snprintf(p_enum_specifier->tag_name, sizeof p_enum_specifier->tag_name, "%s", ctx->current->lexeme);
+            struct token* last_name;
+            struct token_node* names = consume_ident_coloncolon_list(ctx, &last_name);
 
-            p_enum_specifier->tag_token = ctx->current;
-            parser_match(ctx);
+            struct token* not_found_tok;
+            np = find_nameprefix(ctx, names, &not_found_tok, NP_ALLOW_ALL);
+
+            if (np == NULL && names != NULL)
+            {
+                diagnostic(C_ERROR_NOT_FOUND, ctx, not_found_tok, NULL, "_Nameprefix not found");
+                throw;
+            }
+
+            struct token* tagtoken;
+            if (np == NULL)
+            {
+                tagtoken = last_name;
+            }
+            else
+            {
+                tagtoken = clone_token(last_name);
+                free(tagtoken->lexeme);
+                tagtoken->lexeme = get_nameprefixed_name(ctx, np, last_name->lexeme);
+            }
+
+            snprintf(p_enum_specifier->tag_name, sizeof p_enum_specifier->tag_name, "%s", tagtoken->lexeme);
+
+            p_enum_specifier->tag_token = tagtoken;
 
             struct scope* sc;
             struct map_entry* found_tag = find_tag(ctx, p_enum_specifier->tag_token->lexeme, &sc);
@@ -6437,6 +6478,9 @@ struct enum_specifier* _Owner _Opt enum_specifier(struct parser_ctx* ctx)
 
         if (ctx->current->type == '{')
         {
+            // static_assert(0);
+            // reject if qualified name and in apply-prefix scope
+
             if (prev_decl && (p_enum_specifier->has_underlying != prev_decl->has_underlying))
             {
                 diagnostic(C_ERROR_INCOMPATIBLE_TYPES, ctx, p_enum_specifier->first_token, NULL, "enum redeclared without underlying type");
@@ -6476,6 +6520,12 @@ struct enum_specifier* _Owner _Opt enum_specifier(struct parser_ctx* ctx)
             hashmap_set(&ctx->scopes.tail->tags, p_enum_specifier->tag_name, &item);
             p_enum_specifier->p_complete_enum_specifier = p_enum_specifier;
             hash_item_set_destroy(&item);
+
+            if (np)
+            {
+                struct map_entry* map_entry = hashmap_find(&ctx->scopes.tail->tags, p_enum_specifier->tag_name);
+                nameprefix_push_entry(ctx, np, map_entry, true);
+            }
         }
         else
         {
@@ -6501,6 +6551,12 @@ struct enum_specifier* _Owner _Opt enum_specifier(struct parser_ctx* ctx)
                 hashmap_set(&ctx->scopes.tail->tags, p_enum_specifier->tag_name, &item);
                 p_enum_specifier->p_complete_enum_specifier = p_enum_specifier;
                 hash_item_set_destroy(&item);
+
+                if (np)
+                {
+                    struct map_entry* map_entry = hashmap_find(&ctx->scopes.tail->tags, p_enum_specifier->tag_name);
+                    nameprefix_push_entry(ctx, np, map_entry, true);
+                }
             }
         }
     }
@@ -12615,23 +12671,28 @@ struct nameprefix* find_nameprefix_in_list(const char* name, const struct namepr
     return NULL;
 }
 
-static struct nameprefix* find_nested_nameprefix_in_list(const struct parser_ctx* ctx, const struct token_node* names, const struct nameprefix* head, struct token** not_found_tok)
+struct nameprefix* find_nested_nameprefix_in_list(const struct parser_ctx* ctx, const struct token_node* names, const struct nameprefix* head, struct token** not_found_tok)
 {
     *not_found_tok = NULL;
     const struct token_node* it = names;
-    const struct nameprefix* np_it = head;
+    const struct nameprefix* list = head;
+
     while (it)
     {
-        const struct nameprefix* found = find_nameprefix_in_list(it->token->lexeme, np_it);
+        const struct nameprefix* found = find_nameprefix_in_list(it->token->lexeme, list);
         if (!found)
         {
             *not_found_tok = it->token;
             return NULL;
         }
         it = it->next;
-        np_it = found;
+
+        if (it)
+            list = found->nested_nps;
+        else
+            return (struct nameprefix*) found;
     }
-    return (struct nameprefix*) np_it;
+    return NULL;
 }
 
 static bool in_apply_prefix_scope(const struct parser_ctx* ctx)
@@ -12639,7 +12700,7 @@ static bool in_apply_prefix_scope(const struct parser_ctx* ctx)
     return ctx->nameprefix_scope && !ctx->nameprefix_scope->is_capture;
 }
 
-static bool in_apply_prefix_file_scope(struct parser_ctx* ctx)
+static bool in_apply_prefix_file_scope(const struct parser_ctx* ctx)
 {
     return ctx->scopes.tail->previous == NULL && in_apply_prefix_scope(ctx);
 }
@@ -12647,11 +12708,11 @@ static bool in_apply_prefix_file_scope(struct parser_ctx* ctx)
 // if caller is sure sequence is entirely nameprefixes (doesnt end with var like A::B::i)
 // make sure the caller has all the names in `names` including C
 // `A::B::C`
-static struct nameprefix* find_nameprefix(const struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt)
+struct nameprefix* find_nameprefix(const struct parser_ctx* ctx, struct token_node* names, struct token** not_found_tok, enum nameprefix_scope_search opt)
 {
     *not_found_tok = NULL;
 
-    if (opt == NP_ALLOW_ALL) // aliases allowed, search them
+    if (opt == NP_ALLOW_ALL && names != NULL) // aliases allowed, search them
     {
         struct token* first_name = names->token;
         struct scope* scope_it = ctx->scopes.tail;
@@ -12675,7 +12736,12 @@ static struct nameprefix* find_nameprefix(const struct parser_ctx* ctx, struct t
     {
         if (opt == NP_ALLOW_ALL) // we're inside an apply-prefix scope, can use available names, searching up-wards
         {
-            struct nameprefix* cur = ctx->nameprefix_scope->np;
+            if (names == NULL)
+            {
+                return ctx->nameprefix_scope->np_head->np;
+            }
+
+            struct nameprefix* cur = ctx->nameprefix_scope->np_head->np;
             struct nameprefix* found = NULL;
             bool found_first_name = false;
             while (cur && !found_first_name)
@@ -12707,6 +12773,26 @@ static struct nameprefix* find_nameprefix(const struct parser_ctx* ctx, struct t
     }
     
     return NULL;
+}
+
+static struct nameprefix_entry* nameprefix_push_entry(struct parser_ctx* ctx, struct nameprefix* np, struct map_entry* map_entry, bool is_tag)
+{
+    assert(np);
+
+    struct nameprefix_entry** it;
+    if (is_tag)
+        it = &np->tag_entries;
+    else
+        it = &np->var_entries;
+
+    while (*it)
+    {
+        it = &(*it)->next;
+    }
+
+    *it = calloc(1, sizeof ** it);
+    (*it)->entry = map_entry;
+    return *it;
 }
 
 static void push_nameprefix(struct parser_ctx* ctx, struct nameprefix* parent, struct nameprefix* new_np)
@@ -12790,29 +12876,11 @@ static struct token_node* consume_ident_coloncolon_list(struct parser_ctx* ctx, 
     return head;
 }
 
-char *get_nameprefixed_name(struct parser_ctx* ctx, struct token* token, bool* uses_np, struct nameprefix** np, struct token** last_name)
+char* get_nameprefixed_name(struct parser_ctx* ctx, struct nameprefix* np, const char *unprefixed_name)
 {
-    struct token_node* names = extract_ident_coloncolon_list(ctx, token, last_name);
-
-    *uses_np = names != NULL;
-
-    struct token* not_found;
-    *np = find_nameprefix(ctx, names, &not_found, NP_ALLOW_ALL);
-    if (*np == NULL)
-    {
-        return strdup((*last_name)->lexeme);
-    }
-
-    size_t needed_len = strlen((*np)->prefix) + strlen((*last_name)->lexeme);
-    char* prefixed_name = malloc(needed_len + 1);
-    sprintf(prefixed_name, "%s%s", (*np)->prefix, (*last_name)->lexeme);
-    return prefixed_name; // maybe delete this function and use get_entry
-
-    // TODO rules are not as simple as earlier thought.
-    // for an entry to enter a nameprefix, it *must* be declared inside it unqualified
-    // no other way to enter
-    // plan:
-    // check if inside np scope, if so check if unqualified name, if so, add it to np (following capture vs apply rules).
+    char* prefixed_name = malloc(strlen(np->prefix) + strlen(unprefixed_name) + 1);
+    sprintf(prefixed_name, "%s%s", np->prefix, unprefixed_name);
+    return prefixed_name;
 }
 
 void token_node_push(struct token_node** head, struct token* new_node)
@@ -13166,7 +13234,9 @@ void parse_nameprefix_scope(struct parser_ctx* ctx, bool is_capture)
         }
 
         struct nameprefix_scope* new_np_scope = calloc(1, sizeof * new_np_scope);
-        new_np_scope->np = np;
+        new_np_scope->np_head = calloc(1, sizeof * new_np_scope->np_head);
+        new_np_scope->np_head->np = np;
+
         new_np_scope->is_capture = is_capture;
         push_nameprefix_scope(ctx, new_np_scope);
 
